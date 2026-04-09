@@ -30,9 +30,6 @@
 *.lnp
 *.d
 
-#untrack files
-
-
 # host programs on Cygwin
 *.exe
 

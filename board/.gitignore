@@ -29,9 +29,13 @@
 *.axf
 *.lnp
 *.d
+*.ld
 
 #untrack files
-
+/html
+/latex
+/middleware
+/test
 
 # host programs on Cygwin
 *.exe
