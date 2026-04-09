@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: BSD-3-Clause */
+
+# Copyright (c) 2022 Rockchip Electronics Co., Ltd.
+
+PROJECT		:= RK3506
+SOC		:= RK3506
+CPU		:= -mcpu=cortex-m0
+
+# BUS M0
+CFLAGS := -O2
+LDFLAGS := --specs=nosys.specs
+CFLAGS += -DHAL_CANFD_MODULE_ENABLED
+LINKER_SCRIPT := gcc_bus_m0.ld
+
+-include ../../../middleware/benchmark/benchmark.mk
+-include ../../../middleware/rpmsg-lite/rpmsg-lite.mk
+-include ../../../middleware/simple_console/simple_console.mk
+
+
+INCLUDES += -I ../bsp/bsp_uart \
+            -I ../bsp/bsp_can
+
+
+SRC_DIRS += ../bsp/bsp_uart \
+            ../bsp/bsp_can
+
+
+include ../../common/GCC/Cortex-M.mk
