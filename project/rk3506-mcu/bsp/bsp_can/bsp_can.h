@@ -7,6 +7,10 @@
 #define CAN_MX_REGISTER_CNT 2U
 #define DEVICE_CAN_CNT      2U
 
+#define CAN_INTERRUPT_RX    0x01U
+#define CAN_INTERRUPT_TX    0x02U
+#define CAN_INTERRUPT_ALL   (CAN_INTERRUPT_RX | CAN_INTERRUPT_TX)
+
 typedef struct CANInstance CANInstance;
 typedef void (*CAN_Callback)(CANInstance *ins);
 
@@ -36,6 +40,15 @@ typedef struct {
 void CAN_Service_Init(void);
 
 /**
+ * @brief 配置 CAN TX/RX 中断开关。
+ * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
+ *
+ * 默认值为 CAN_INTERRUPT_RX，即只打开 RX 中断。
+ * 该接口可在 CAN_Service_Init() 前后调用；若在初始化后调用，会立即更新硬件屏蔽寄存器。
+ */
+void CAN_SetInterruptEnable(uint32_t interrupt_mask);
+
+/**
  * @brief 注册一个 CAN 业务实例。
  * @param config 注册参数。
  * @return 注册成功返回实例指针，失败返回 NULL。
@@ -56,6 +69,12 @@ void CAN_SetDLC(CANInstance *instance, uint8_t length);
  * @return 1 表示发送成功，0 表示发送失败或超时。
  */
 uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms);
+
+/**
+ * @brief 兼容旧命名风格的中断配置接口。
+ * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
+ */
+void CANSetInterruptEnable(uint32_t interrupt_mask);
 
 /**
  * @brief 兼容旧命名风格的注册接口。

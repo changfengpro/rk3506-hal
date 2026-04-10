@@ -25,16 +25,17 @@ extern const struct HAL_CANFD_DEV g_can1Dev;
  * RK3506 接收主路径为 MFI/RXSTR_*，并非只看 RX_FINISH。
  * 纯硬件中断模式下，发送完成/失败也必须放行，由 ISR 负责更新状态。
  */
-#define CAN_IRQ_UNMASK_BITS     (CAN_INT_MFI_INT_MASK | \
+#define CAN_RX_IRQ_UNMASK_BITS  (CAN_INT_MFI_INT_MASK | \
                                  CAN_INT_RX_FINISH_INT_MASK | \
                                  CAN_INT_RXSTR_FULL_INT_MASK | \
-                                 CAN_INT_RXSTR_OVERFLOW_INT_MASK | \
-                                 CAN_TX_DONE_MASK | \
-                                 CAN_TX_FAIL_MASK)
+                                 CAN_INT_RXSTR_OVERFLOW_INT_MASK)
+
+#define CAN_TX_IRQ_UNMASK_BITS  (CAN_TX_DONE_MASK | CAN_TX_FAIL_MASK)
 
 #define CAN_RX_EVENT_MASK       (CAN_INT_MFI_INT_MASK | \
                                  CAN_INT_RX_FINISH_INT_MASK | \
                                  CAN_INT_RXSTR_FULL_INT_MASK | \
+                                 CAN_INT_RXSTR_OVERFLOW_INT_MASK | \
                                  CAN_INT_ISM_WTM_INT_MASK | \
                                  CAN_INT_RXSTR_TIMEOUT_INT_MASK)
 
@@ -74,6 +75,8 @@ static CANInstance *can_instances[CAN_MX_REGISTER_CNT] = { NULL };
 static uint8_t instance_idx = 0U;
 static volatile uint32_t s_canTxDone[CAN_DEVICE_COUNT] = { 0U };
 static volatile uint32_t s_canTxFail[CAN_DEVICE_COUNT] = { 0U };
+static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_RX;
+static uint8_t s_canServiceInitialized = 0U;
 
 /*
  * 这些计数用于保留当前已验证通过的中断链路实现形态。
@@ -146,6 +149,18 @@ static void CAN_EnableIntmuxSourceIRQ(const struct HAL_CANFD_DEV *dev);
 static void CAN_ApplyRuntimeInterruptMask(const struct HAL_CANFD_DEV *dev);
 
 /**
+ * @brief 获取当前运行期需要放行的中断位。
+ * @return INT_MASK 中需要解屏蔽的中断位组合。
+ */
+static uint32_t CAN_GetRuntimeInterruptUnmaskBits(void);
+
+/**
+ * @brief 判断当前是否启用了 TX 中断。
+ * @return 1 表示已启用，0 表示未启用。
+ */
+static uint8_t CAN_IsTxInterruptEnabled(void);
+
+/**
  * @brief 根据模式位补充 HAL 未覆盖的 CAN 模式设置。
  * @param pReg CAN 寄存器基址。
  * @param canfdMode CANFD 模式位。
@@ -158,6 +173,14 @@ static void CAN_ApplyModeFlags(struct CAN_REG *pReg, uint32_t canfdMode);
  * @param sclkHz 当前 CAN SCLK 频率。
  */
 static void CAN_ApplyNominalTiming1M(struct CAN_REG *pReg, uint32_t sclkHz);
+
+/**
+ * @brief 根据中断状态更新指定控制器的 TX 完成/失败标志。
+ * @param pReg CAN 控制器基址。
+ * @param isr 当前中断状态。
+ * @param devIdx 控制器索引。
+ */
+static void CAN_UpdateTxStatus(struct CAN_REG *pReg, uint32_t isr, uint32_t devIdx);
 
 /**
  * @brief 按 32bit 字边界整理 CAN 载荷字节序。
@@ -333,7 +356,36 @@ static void CAN_EnableIntmuxSourceIRQ(const struct HAL_CANFD_DEV *dev)
  */
 static void CAN_ApplyRuntimeInterruptMask(const struct HAL_CANFD_DEV *dev)
 {
-    WRITE_REG(dev->pReg->INT_MASK, CAN_INT_VALID_MASK & ~CAN_IRQ_UNMASK_BITS);
+    uint32_t unmaskBits = CAN_GetRuntimeInterruptUnmaskBits();
+
+    WRITE_REG(dev->pReg->INT_MASK, CAN_INT_VALID_MASK & ~unmaskBits);
+}
+
+/**
+ * @brief 获取当前运行期需要放行的中断位。
+ * @return INT_MASK 中需要解屏蔽的中断位组合。
+ */
+static uint32_t CAN_GetRuntimeInterruptUnmaskBits(void)
+{
+    uint32_t unmaskBits = 0U;
+
+    if ((s_canInterruptEnableMask & CAN_INTERRUPT_RX) != 0U) {
+        unmaskBits |= CAN_RX_IRQ_UNMASK_BITS;
+    }
+    if ((s_canInterruptEnableMask & CAN_INTERRUPT_TX) != 0U) {
+        unmaskBits |= CAN_TX_IRQ_UNMASK_BITS;
+    }
+
+    return unmaskBits;
+}
+
+/**
+ * @brief 判断当前是否启用了 TX 中断。
+ * @return 1 表示已启用，0 表示未启用。
+ */
+static uint8_t CAN_IsTxInterruptEnabled(void)
+{
+    return ((s_canInterruptEnableMask & CAN_INTERRUPT_TX) != 0U) ? 1U : 0U;
 }
 
 /**
@@ -379,6 +431,46 @@ static void CAN_ApplyNominalTiming1M(struct CAN_REG *pReg, uint32_t sclkHz)
 
         WRITE_REG(pReg->FD_NOMINAL_BITTIMING, nominal);
         WRITE_REG(pReg->FD_DATA_BITTIMING, data);
+    }
+}
+
+/**
+ * @brief 根据中断状态更新指定控制器的 TX 完成/失败标志。
+ * @param pReg CAN 控制器基址。
+ * @param isr 当前中断状态。
+ * @param devIdx 控制器索引。
+ */
+static void CAN_UpdateTxStatus(struct CAN_REG *pReg, uint32_t isr, uint32_t devIdx)
+{
+    uint32_t txFailIsr = 0U;
+
+    if (devIdx >= CAN_DEVICE_COUNT) {
+        return;
+    }
+
+    if ((isr & CAN_TX_DONE_MASK) != 0U) {
+        s_canTxDone[devIdx] = 1U;
+    }
+
+    txFailIsr |= isr & (CAN_INT_BUS_OFF_INT_MASK |
+                        CAN_INT_TX_ARBIT_FAIL_INT_MASK |
+                        CAN_INT_AUTO_RETX_FAIL_INT_MASK);
+    if ((isr & (CAN_INT_ERROR_INT_MASK |
+                CAN_INT_PASSIVE_ERROR_INT_MASK |
+                CAN_INT_OVERLOAD_INT_MASK |
+                CAN_INT_ERROR_WARNING_INT_MASK)) != 0U) {
+        uint32_t errCode = READ_REG(pReg->ERROR_CODE);
+
+        if ((errCode & CAN_ERROR_CODE_ERROR_DIRECTION_MASK) == 0U) {
+            txFailIsr |= isr & (CAN_INT_ERROR_INT_MASK |
+                                CAN_INT_PASSIVE_ERROR_INT_MASK |
+                                CAN_INT_OVERLOAD_INT_MASK |
+                                CAN_INT_ERROR_WARNING_INT_MASK);
+        }
+    }
+
+    if (txFailIsr != 0U) {
+        s_canTxFail[devIdx] = txFailIsr;
     }
 }
 
@@ -543,37 +635,13 @@ static void CAN_DrainRxFifo(struct CAN_REG *pReg)
 void CAN_Common_IRQHandler(struct CAN_REG *pReg)
 {
     uint32_t devIdx;
-    uint32_t txFailIsr = 0U;
     uint32_t isr = HAL_CANFD_GetInterrupt(pReg);
 
     g_can_common_hit_count++;
     g_can_last_isr = isr;
     devIdx = CAN_GetDeviceIndexByReg(pReg);
 
-    if (devIdx < CAN_DEVICE_COUNT) {
-        if ((isr & CAN_TX_DONE_MASK) != 0U) {
-            s_canTxDone[devIdx] = 1U;
-        }
-        txFailIsr |= isr & (CAN_INT_BUS_OFF_INT_MASK |
-                            CAN_INT_TX_ARBIT_FAIL_INT_MASK |
-                            CAN_INT_AUTO_RETX_FAIL_INT_MASK);
-        if ((isr & (CAN_INT_ERROR_INT_MASK |
-                    CAN_INT_PASSIVE_ERROR_INT_MASK |
-                    CAN_INT_OVERLOAD_INT_MASK |
-                    CAN_INT_ERROR_WARNING_INT_MASK)) != 0U) {
-            uint32_t errCode = READ_REG(pReg->ERROR_CODE);
-
-            if ((errCode & CAN_ERROR_CODE_ERROR_DIRECTION_MASK) == 0U) {
-                txFailIsr |= isr & (CAN_INT_ERROR_INT_MASK |
-                                    CAN_INT_PASSIVE_ERROR_INT_MASK |
-                                    CAN_INT_OVERLOAD_INT_MASK |
-                                    CAN_INT_ERROR_WARNING_INT_MASK);
-            }
-        }
-        if (txFailIsr != 0U) {
-            s_canTxFail[devIdx] = txFailIsr;
-        }
-    }
+    CAN_UpdateTxStatus(pReg, isr, devIdx);
 
     if ((isr & CAN_RX_EVENT_MASK) != 0U) {
         CAN_DrainRxFifo(pReg);
@@ -689,6 +757,27 @@ void CAN_Service_Init(void)
     for (i = 0U; i < CAN_DEVICE_COUNT; i++) {
         CAN_ApplyRuntimeInterruptMask(s_canDevs[i]);
     }
+
+    s_canServiceInitialized = 1U;
+}
+
+/**
+ * @brief 配置 CAN TX/RX 中断开关。(似乎该MCU不支持运行时切换中断位)
+ * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
+ */
+void CAN_SetInterruptEnable(uint32_t interrupt_mask)
+{
+    uint32_t i;
+
+    s_canInterruptEnableMask = interrupt_mask & CAN_INTERRUPT_ALL;
+
+    if (s_canServiceInitialized == 0U) {
+        return;
+    }
+
+    for (i = 0U; i < CAN_DEVICE_COUNT; i++) {
+        CAN_ApplyRuntimeInterruptMask(s_canDevs[i]);
+    }
 }
 
 /**
@@ -787,6 +876,16 @@ uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms)
 
     start = HAL_GetTick();
     while (1) {
+        if (CAN_IsTxInterruptEnabled() == 0U) {
+            uint32_t txIsr = READ_REG(instance->can_handle->INT) &
+                             (CAN_TX_DONE_MASK | CAN_TX_FAIL_MASK);
+
+            if (txIsr != 0U) {
+                WRITE_REG(instance->can_handle->INT, txIsr);
+                CAN_UpdateTxStatus(instance->can_handle, txIsr, devIdx);
+            }
+        }
+
         if (s_canTxDone[devIdx] != 0U) {
             s_canTxDone[devIdx] = 0U;
             return 1U;
@@ -821,6 +920,15 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 void CANSetDLC(CANInstance *instance, uint8_t length)
 {
     CAN_SetDLC(instance, length);
+}
+
+/**
+ * @brief 兼容旧命名风格的中断配置接口。
+ * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
+ */
+void CANSetInterruptEnable(uint32_t interrupt_mask)
+{
+    CAN_SetInterruptEnable(interrupt_mask);
 }
 
 /**
