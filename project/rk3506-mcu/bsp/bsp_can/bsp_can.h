@@ -2,16 +2,10 @@
 #define __BSP_CAN_H
 
 #include "hal_base.h"
-#include "hal_bsp.h" // 必须包含，以获取 HAL_CANFD_DEV 定义
+#include "hal_bsp.h"
 
-// 外部声明，供 main.c 使用
-extern volatile uint32_t g_isr_hit_count;
-extern volatile uint32_t g_can_adapter_hit_count;
-extern volatile uint32_t g_can_common_hit_count;
-extern volatile uint32_t g_can_last_isr;
-extern volatile uint32_t g_can_rx_dispatch_count;
-
-#define CAN_MX_REGISTER_CNT 2
+#define CAN_MX_REGISTER_CNT 2U
+#define DEVICE_CAN_CNT      2U
 
 typedef struct CANInstance CANInstance;
 typedef void (*CAN_Callback)(CANInstance *ins);
@@ -25,6 +19,7 @@ struct CANInstance {
     uint8_t tx_len;
     uint8_t rx_len;
     CAN_Callback can_module_callback;
+    void *id;
 };
 
 typedef struct {
@@ -32,11 +27,56 @@ typedef struct {
     uint32_t tx_id;
     uint32_t rx_id;
     CAN_Callback can_module_callback;
+    void *id;
 } CAN_Init_Config_s;
 
-/* 函数声明 */
+/**
+ * @brief 初始化 CAN 控制器、引脚和中断路由。
+ */
 void CAN_Service_Init(void);
-CANInstance* CAN_Register(CAN_Init_Config_s *config);
-uint8_t CAN_Transmit(CANInstance *_instance, uint32_t timeout_ms);
+
+/**
+ * @brief 注册一个 CAN 业务实例。
+ * @param config 注册参数。
+ * @return 注册成功返回实例指针，失败返回 NULL。
+ */
+CANInstance *CAN_Register(CAN_Init_Config_s *config);
+
+/**
+ * @brief 修改 CAN 发送帧长度。
+ * @param instance 目标 CAN 实例。
+ * @param length 发送长度，经典 CAN 模式下支持 1~8。
+ */
+void CAN_SetDLC(CANInstance *instance, uint8_t length);
+
+/**
+ * @brief 发送一帧标准 CAN 数据帧。
+ * @param instance 已注册的 CAN 实例。
+ * @param timeout_ms 发送等待超时时间，单位毫秒。
+ * @return 1 表示发送成功，0 表示发送失败或超时。
+ */
+uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms);
+
+/**
+ * @brief 兼容旧命名风格的注册接口。
+ * @param config 注册参数。
+ * @return 注册成功返回实例指针，失败返回 NULL。
+ */
+CANInstance *CANRegister(CAN_Init_Config_s *config);
+
+/**
+ * @brief 兼容旧命名风格的发送长度设置接口。
+ * @param instance 目标 CAN 实例。
+ * @param length 发送长度，经典 CAN 模式下支持 1~8。
+ */
+void CANSetDLC(CANInstance *instance, uint8_t length);
+
+/**
+ * @brief 兼容旧命名风格的发送接口。
+ * @param instance 已注册的 CAN 实例。
+ * @param timeout_ms 发送等待超时时间，单位毫秒。
+ * @return 1 表示发送成功，0 表示发送失败或超时。
+ */
+uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 
 #endif /* __BSP_CAN_H */
