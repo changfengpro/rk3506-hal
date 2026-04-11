@@ -10,6 +10,7 @@
 #define RPMSG_EPT_NAME_LEN_MAX    RL_NS_NAME_SIZE
 #define RPMSG_PAYLOAD_SIZE_MAX    RL_BUFFER_PAYLOAD_SIZE
 #define RPMSG_REMOTE_EPT_DYNAMIC  RL_ADDR_ANY
+#define RPMSG_LINK_WAIT_TIMEOUT_MS 10000U
 
 typedef struct RPMsgInstance RPMsgInstance;
 typedef void (*RPMsg_Callback)(RPMsgInstance *ins);
@@ -43,6 +44,13 @@ typedef struct {
  * 并等待链路建立完成。
  */
 void RPMsg_Service_Init(void);
+
+/**
+ * @brief 轮询处理 RPMsg mailbox 兜底流程。
+ *
+ * 建议在主循环中周期调用，用于在极端情况下兜底消费 mailbox 中断。
+ */
+void RPMsg_Service_Poll(void);
 
 /**
  * @brief 查询 RPMsg 链路是否已建立。
