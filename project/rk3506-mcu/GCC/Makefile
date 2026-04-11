@@ -18,11 +18,13 @@ LINKER_SCRIPT := gcc_bus_m0.ld
 
 
 INCLUDES += -I ../bsp/bsp_uart \
-            -I ../bsp/bsp_can
+            -I ../bsp/bsp_can \
+            -I ../bsp/bsp_rpmsg
 
 
 SRC_DIRS += ../bsp/bsp_uart \
-            ../bsp/bsp_can
+            ../bsp/bsp_can \
+            ../bsp/bsp_rpmsg
 
 
 include ../../common/GCC/Cortex-M.mk

@@ -70,32 +70,5 @@ void CAN_SetDLC(CANInstance *instance, uint8_t length);
  */
 uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms);
 
-/**
- * @brief 兼容旧命名风格的中断配置接口。
- * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
- */
-void CANSetInterruptEnable(uint32_t interrupt_mask);
-
-/**
- * @brief 兼容旧命名风格的注册接口。
- * @param config 注册参数。
- * @return 注册成功返回实例指针，失败返回 NULL。
- */
-CANInstance *CANRegister(CAN_Init_Config_s *config);
-
-/**
- * @brief 兼容旧命名风格的发送长度设置接口。
- * @param instance 目标 CAN 实例。
- * @param length 发送长度，经典 CAN 模式下支持 1~8。
- */
-void CANSetDLC(CANInstance *instance, uint8_t length);
-
-/**
- * @brief 兼容旧命名风格的发送接口。
- * @param instance 已注册的 CAN 实例。
- * @param timeout_ms 发送等待超时时间，单位毫秒。
- * @return 1 表示发送成功，0 表示发送失败或超时。
- */
-uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 
 #endif /* __BSP_CAN_H */

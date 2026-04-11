@@ -30,14 +30,18 @@ static LOCK_STATIC_CONTEXT platform_lock_static_ctxt;
 static struct MBOX_REG *rl_pMBox[MBOX_CNT] = { MBOX0, MBOX1, MBOX2, MBOX3 };
 static int32_t register_count = 0;
 
-static void rpmsg_mbox_isr(int irqn, void *param)
+static HAL_Status rpmsg_mbox_isr(uint32_t irqn, void *param)
 {
+    HAL_Status ret;
+
 #ifdef HAL_AP_CORE
-    HAL_MBOX_IrqHandler(irqn, (struct MBOX_REG *)param);
+    ret = HAL_MBOX_IrqHandler((int)irqn, (struct MBOX_REG *)param);
     HAL_GIC_EndOfInterrupt(irqn);
 #else
-    HAL_MBOX_IrqHandler(irqn + NUM_INTERRUPTS, (struct MBOX_REG *)param);
+    ret = HAL_MBOX_IrqHandler((int)(irqn + NUM_INTERRUPTS), (struct MBOX_REG *)param);
 #endif
+
+    return ret;
 }
 
 #ifdef HAL_AP_CORE
@@ -59,9 +63,7 @@ static void rpmsg_remote_cb(struct MBOX_CMD_DAT *msg, void *args)
     uint32_t link_id;
     struct MBOX_CMD_DAT rx_msg = *msg;
 
-    if (rx_msg.DATA != RL_RPMSG_MAGIC) {
-        HAL_DBG("rpmsg remote: mailbox data error!\n");
-    }
+    (void)args;
     link_id = rx_msg.CMD & 0xFFU;
 
     if (first_notify == 0) {
@@ -168,17 +170,16 @@ int32_t platform_init_interrupt(uint32_t vector_id, void *isr_data)
         if (register_count % 2 == 0) {
             HAL_MBOX_Init(rl_pMBox[RL_GET_M_CPU_ID(vector_id)], RL_MBOX_B2A);
             mbox_cl[RL_GET_M_CPU_ID(vector_id)] = &mbox_clr[RL_GET_M_CPU_ID(vector_id)];
-            ret = HAL_MBOX_RegisterClient(rl_pMBox[RL_GET_M_CPU_ID(vector_id)], MBOX_CH_0, mbox_cl[RL_GET_M_CPU_ID(vector_id)]);
-            if (ret) {
-                HAL_DBG("mbox remote client register failed, ret=%d\n", ret);
-            }
+            ret = HAL_MBOX_RegisterClient(rl_pMBox[RL_GET_M_CPU_ID(vector_id)], MBOX_CH_0,
+                                          mbox_cl[RL_GET_M_CPU_ID(vector_id)]);
+            if (ret)
+                return ret;
             mbox_cl[cpu_id] = &mbox_clr[cpu_id];
             HAL_INTMUX_SetIRQHandler(mbox_cl[cpu_id]->irq, rpmsg_mbox_isr, rl_pMBox[cpu_id]);
             HAL_MBOX_Init(rl_pMBox[cpu_id], RL_MBOX_B2A);
             ret = HAL_MBOX_RegisterClient(rl_pMBox[cpu_id], MBOX_CH_0, mbox_cl[cpu_id]);
-            if (ret) {
-                HAL_DBG("mbox remote client register failed, ret=%d\n", ret);
-            }
+            if (ret)
+                return ret;
         }
         register_count++;
 #endif
