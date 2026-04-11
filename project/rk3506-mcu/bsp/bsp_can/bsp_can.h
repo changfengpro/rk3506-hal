@@ -43,7 +43,7 @@ void CAN_Service_Init(void);
  * @brief 配置 CAN TX/RX 中断开关。
  * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
  *
- * 默认值为 CAN_INTERRUPT_RX，即只打开 RX 中断。
+ * 默认值为 CAN_INTERRUPT_ALL，即同时打开 TX 和 RX 中断。
  * 该接口可在 CAN_Service_Init() 前后调用；若在初始化后调用，会立即更新硬件屏蔽寄存器。
  */
 void CAN_SetInterruptEnable(uint32_t interrupt_mask);

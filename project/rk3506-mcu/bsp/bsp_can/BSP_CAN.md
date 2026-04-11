@@ -94,8 +94,8 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 #define CAN_INTERRUPT_ALL   (CAN_INTERRUPT_RX | CAN_INTERRUPT_TX)
 ```
 
-- 默认配置是 `CAN_INTERRUPT_RX`，也就是只打开 RX 中断。
-- `static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_RX;`
+- 默认配置是 `CAN_INTERRUPT_ALL`，也就是同时打开 TX 和 RX 中断。
+- `static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_ALL;`
 - 如果希望同时打开 TX 和 RX 中断，请传入 `CAN_INTERRUPT_ALL`。
 - 如果希望关闭 TX 中断但保留接收回调，传入 `CAN_INTERRUPT_RX` 即可。
 - 如果希望关闭全部中断，可以传入 `0U`。此时发送接口仍会轮询 TX 状态，但接收回调不会再靠中断触发。
@@ -105,7 +105,7 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 常见用法：
 
 ```c
-/* 默认行为：只开 RX 中断 */
+/* 如需只开 RX 中断 */
 
 CAN_SetInterruptEnable(CAN_INTERRUPT_RX);
 CAN_Service_Init();
@@ -182,7 +182,7 @@ static uint8_t idx = 0U;
 ## 注意事项
 
 - 当前发送路径使用的是标准数据帧，推荐 `DLC <= 8`。
-- 默认只打开 RX 中断；如果没有显式开启 TX 中断，`CAN_Transmit()` 会改为轮询 TX 完成/失败状态。
+- 默认同时打开 TX 和 RX 中断；如果应用层显式关闭 TX 中断，`CAN_Transmit()` 会改为轮询 TX 完成/失败状态。
 - 如果总线上没有其它有效节点给 ACK，发送邮箱可能会被自动重发占住，最终导致发送超时。
 - 如果某个任务周期要求非常严格，`timeout_ms` 不应设置过大，否则等待邮箱/等待发送结果的过程可能影响该任务的时序精度。
 - 当前 `CAN_Register()` 会动态分配实例内存，如果后续实例数量固定且非常关注内存碎片，可以再改为静态实例池。

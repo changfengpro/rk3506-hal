@@ -75,7 +75,7 @@ static CANInstance *can_instances[CAN_MX_REGISTER_CNT] = { NULL };
 static uint8_t instance_idx = 0U;
 static volatile uint32_t s_canTxDone[CAN_DEVICE_COUNT] = { 0U };
 static volatile uint32_t s_canTxFail[CAN_DEVICE_COUNT] = { 0U };
-static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_RX;
+static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_ALL;
 static uint8_t s_canServiceInitialized = 0U;
 
 /*
@@ -324,13 +324,6 @@ static void CAN_BindIntmuxOutIRQHandler(IRQn_Type outIrq)
 static void CAN_ConfigIntmuxOutputIRQs(const IRQn_Type *outIrqs, uint32_t outCount)
 {
     uint32_t i;
-
-    for (i = 0U; i < (uint32_t)INTMUX_NUM_OUT_PER_CON; i++) {
-        IRQn_Type outIrq = (IRQn_Type)((uint32_t)INTMUX_OUT_IRQ_START_NUM + i);
-
-        HAL_NVIC_ClearPendingIRQ(outIrq);
-        HAL_NVIC_DisableIRQ(outIrq);
-    }
 
     for (i = 0U; i < outCount; i++) {
         HAL_NVIC_ClearPendingIRQ(outIrqs[i]);
@@ -899,5 +892,3 @@ uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms)
         }
     }
 }
-
-
