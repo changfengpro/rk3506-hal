@@ -1,3 +1,8 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
+ */
+
 #ifndef __BSP_CAN_H
 #define __BSP_CAN_H
 
@@ -37,38 +42,36 @@ typedef struct {
 /**
  * @brief 初始化 CAN 控制器、引脚和中断路由。
  */
-void CAN_Service_Init(void);
+void CANServiceInit(void);
 
 /**
  * @brief 配置 CAN TX/RX 中断开关。
  * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
- *
- * 默认值为 CAN_INTERRUPT_ALL，即同时打开 TX 和 RX 中断。
- * 该接口可在 CAN_Service_Init() 前后调用；若在初始化后调用，会立即更新硬件屏蔽寄存器。
  */
-void CAN_SetInterruptEnable(uint32_t interrupt_mask);
+void CANSetInterruptEnable(uint32_t interrupt_mask);
 
 /**
  * @brief 注册一个 CAN 业务实例。
  * @param config 注册参数。
  * @return 注册成功返回实例指针，失败返回 NULL。
  */
-CANInstance *CAN_Register(CAN_Init_Config_s *config);
+CANInstance *CANRegister(CAN_Init_Config_s *config);
 
 /**
  * @brief 修改 CAN 发送帧长度。
  * @param instance 目标 CAN 实例。
  * @param length 发送长度，经典 CAN 模式下支持 1~8。
  */
-void CAN_SetDLC(CANInstance *instance, uint8_t length);
+void CANSetDLC(CANInstance *instance, uint8_t length);
 
 /**
  * @brief 发送一帧标准 CAN 数据帧。
  * @param instance 已注册的 CAN 实例。
- * @param timeout_ms 发送等待超时时间，单位毫秒。
- * @return 1 表示发送成功，0 表示发送失败或超时。
+ * @param timeout_ms 发送邮箱等待超时时间，单位毫秒。
+ * @return 1 表示成功写入发送邮箱，0 表示邮箱超时不可用或参数非法。
  */
-uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms);
+uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
+
 
 
 #endif /* __BSP_CAN_H */

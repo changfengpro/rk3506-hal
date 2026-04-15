@@ -11,8 +11,40 @@
 
 #include <string.h>
 
-#define RPMSG_TEST
+// #define RPMSG_TEST
 #define CAN_TEST
+
+#if defined(HAL_CANFD_MODULE_ENABLED)
+static void App_MaskBootEnabledNVICIrqs(void)
+{
+    uint32_t i;
+
+    for (i = 0U; i < (uint32_t)NUM_INTERRUPTS; i++) {
+        HAL_NVIC_DisableIRQ((IRQn_Type)i);
+        HAL_NVIC_ClearPendingIRQ((IRQn_Type)i);
+    }
+}
+
+static void App_QuietCanStaleIrqBeforeIntmux(void)
+{
+#if defined(HAL_CRU_MODULE_ENABLED)
+    HAL_CRU_ClkEnable(g_can0Dev.pclkGateID);
+    HAL_CRU_ClkEnable(g_can1Dev.pclkGateID);
+#endif
+    (void)HAL_CANFD_GetInterrupt(g_can0Dev.pReg);
+    (void)HAL_CANFD_GetInterrupt(g_can1Dev.pReg);
+    HAL_INTMUX_DisableIRQ(CAN0_IRQn);
+    HAL_INTMUX_DisableIRQ(CAN1_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_AP_0_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_AP_1_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_AP_2_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_AP_3_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_BB_0_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_BB_1_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_BB_2_IRQn);
+    HAL_INTMUX_DisableIRQ(MAILBOX_BB_3_IRQn);
+}
+#endif
 
 #ifdef RPMSG_TEST
 
@@ -61,10 +93,7 @@ static CANInstance *g_canIns;
 
 static void App_CanCallback(CANInstance *ins)
 {
-    if (ins == NULL) {
-        return;
-    }
-
+    (void)ins;
     HAL_DBG("can rx ok\n");
 }
 
@@ -78,9 +107,10 @@ static void App_CanInit(void)
     config.rx_id = APP_CAN_RX_ID;
     config.can_module_callback = App_CanCallback;
 
-    g_canIns = CAN_Register(&config);
+    CANSetInterruptEnable(CAN_INTERRUPT_RX);
+    g_canIns = CANRegister(&config);
     HAL_ASSERT(g_canIns != NULL);
-    CAN_SetDLC(g_canIns, 8U);
+    CANSetDLC(g_canIns, 8U);
 }
 
 static void App_CanSendTest(void)
@@ -100,7 +130,7 @@ static void App_CanSendTest(void)
     g_canIns->tx_buff[6] = 0x03U;
     g_canIns->tx_buff[7] = 0x04U;
 
-    if (CAN_Transmit(g_canIns, 1000U) != 0U) {
+    if (CANTransmit(g_canIns, 1000U) != 0U) {
         HAL_DBG("can tx ok\n");
     } else {
         HAL_DBG_ERR("can tx err\n");
@@ -108,14 +138,16 @@ static void App_CanSendTest(void)
 
     counter++;
 }
-
 #endif
 
 int main(void)
 {
     HAL_Init();
     BSP_Init();
-    HAL_INTMUX_Init();
+#if defined(HAL_CANFD_MODULE_ENABLED)
+    App_MaskBootEnabledNVICIrqs();
+    // App_QuietCanStaleIrqBeforeIntmux();
+#endif
     BSP_UART_Init();
 
 #ifdef RPMSG_TEST
@@ -124,10 +156,9 @@ int main(void)
 #endif
 
 #ifdef CAN_TEST
-    CAN_SetInterruptEnable(CAN_INTERRUPT_RX);
-    CAN_Service_Init();
     App_CanInit();
 #endif
+    __enable_irq();
 
     while (1) {
 #ifdef CAN_TEST
