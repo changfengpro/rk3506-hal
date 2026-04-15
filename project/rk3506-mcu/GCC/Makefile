@@ -9,7 +9,6 @@ CPU		:= -mcpu=cortex-m0
 # BUS M0
 CFLAGS := -O2
 LDFLAGS := --specs=nosys.specs
-CFLAGS += -DHAL_CANFD_MODULE_ENABLED
 LINKER_SCRIPT := gcc_bus_m0.ld
 
 -include ../../../middleware/benchmark/benchmark.mk
