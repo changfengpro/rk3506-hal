@@ -426,6 +426,7 @@ static void CANDispatchRxMessage(struct CAN_REG *pReg, const struct CANFD_MSG *r
             copyLen = sizeof(can_instance[i]->rx_buff);
         }
 
+        memset(can_instance[i]->rx_buff, 0, sizeof(can_instance[i]->rx_buff));
         CANSwapBytesPerWord(can_instance[i]->rx_buff, rx_msg->data, copyLen);
         can_instance[i]->rx_len = copyLen;
 
