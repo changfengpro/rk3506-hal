@@ -17,6 +17,7 @@ extern const struct HAL_CANFD_DEV g_can1Dev;
 #define CAN_SCLK_24M_MIN_HZ     23000000U
 #define CAN_SCLK_24M_MAX_HZ     25000000U
 #define CAN_RX_DRAIN_LIMIT      16U
+#define CAN_RX_FIFO_WORDS       16U
 #define CAN_CLASSIC_DLC_MAX     8U
 #define CAN_INTMUX_OUT_COUNT    INTMUX_NUM_OUT_PER_CON
 #define CAN_INT_VALID_MASK      0x000FFFFFU
@@ -96,6 +97,11 @@ volatile uint32_t g_canSclkHz[DEVICE_CAN_CNT] = {
 };
 
 static HAL_Status CANINTMUXAdapter(uint32_t irq, void *args);
+
+static const uint8_t s_dlc2len[16] = {
+    0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U,
+    8U, 12U, 16U, 20U, 24U, 32U, 48U, 64U,
+};
 
 /**
  * @brief 屏蔽并清除启动阶段可能遗留的 NVIC 状态。
@@ -330,6 +336,69 @@ static void CANSwapBytesPerWord(uint8_t *dst, const uint8_t *src, uint8_t len)
     }
 }
 
+static HAL_Status CANReceiveCompat(struct CAN_REG *pReg, struct CANFD_MSG *rxMsg)
+{
+    uint32_t info;
+    uint32_t id;
+    uint32_t words[CAN_RX_FIFO_WORDS];
+    uint8_t len;
+    uint8_t i;
+
+    if ((pReg == NULL) || (rxMsg == NULL)) {
+        return HAL_ERROR;
+    }
+
+    info = READ_REG(pReg->RX_FIFO_RDATA);
+    id = READ_REG(pReg->RX_FIFO_RDATA);
+
+#if defined(SOC_RK3568) || defined(SOC_RK3358)
+    (void)READ_REG(pReg->RX_FIFO_RDATA);
+#endif
+
+    for (i = 0U; i < CAN_RX_FIFO_WORDS; i++) {
+        words[i] = READ_REG(pReg->RX_FIFO_RDATA);
+    }
+
+    memset(rxMsg, 0, sizeof(*rxMsg));
+    len = s_dlc2len[(info >> CAN_FD_RXFRAMEINFO_RXDATA_LENGTH_SHIFT) & 0x0FU];
+    rxMsg->ide = (uint8_t)((info & CAN_FD_RXFRAMEINFO_RXFRAME_FORMAT_MASK) >>
+                           CAN_FD_RXFRAMEINFO_RXFRAME_FORMAT_SHIFT);
+    rxMsg->rtr = (uint8_t)((info & CAN_FD_RXFRAMEINFO_RX_RTR_MASK) >>
+                           CAN_FD_RXFRAMEINFO_RX_RTR_SHIFT);
+    rxMsg->fdf = (uint8_t)((info & CAN_FD_RXFRAMEINFO_RX_FDF_MASK) >>
+                           CAN_FD_RXFRAMEINFO_RX_FDF_SHIFT);
+    rxMsg->dlc = len;
+
+    if (rxMsg->ide == CANFD_ID_EXTENDED) {
+        rxMsg->extId = id & CAN_FD_RXID_RX_ID_MASK;
+    } else {
+        rxMsg->stdId = (uint16_t)(id & 0x7FFU);
+    }
+
+    for (i = 0U; i < (uint8_t)(len / 4U); i++) {
+        uint32_t w = words[i];
+        uint8_t b = (uint8_t)(i * 4U);
+
+        rxMsg->data[b] = (uint8_t)((w >> 24) & 0xFFU);
+        rxMsg->data[b + 1U] = (uint8_t)((w >> 16) & 0xFFU);
+        rxMsg->data[b + 2U] = (uint8_t)((w >> 8) & 0xFFU);
+        rxMsg->data[b + 3U] = (uint8_t)(w & 0xFFU);
+    }
+
+    if ((len & 0x03U) != 0U) {
+        uint32_t w = words[len / 4U];
+        uint8_t b = (uint8_t)(len & 0xFCU);
+        uint8_t rem = (uint8_t)(len & 0x03U);
+        uint8_t j;
+
+        for (j = 0U; j < rem; j++) {
+            rxMsg->data[b + j] = (uint8_t)((w >> (8U * (rem - 1U - j))) & 0xFFU);
+        }
+    }
+
+    return HAL_OK;
+}
+
 /**
  * @brief 将接收到的报文分发给已注册实例。
  * @param pReg 收包控制器基址。
@@ -385,7 +454,7 @@ static void CANDrainRxFifo(struct CAN_REG *pReg)
             break;
         }
 
-        if (HAL_CANFD_Receive(pReg, &rx_msg) != HAL_OK) {
+        if (CANReceiveCompat(pReg, &rx_msg) != HAL_OK) {
             break;
         }
 
