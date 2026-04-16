@@ -10,7 +10,8 @@
 ## 使用说明
 
 如果你希望新增一个基于 CAN 的 module，推荐在该 module 的结构体内部保存一个 `CANInstance *can_instance` 指针。  
-模块初始化时调用 `CAN_Register()` 或兼容接口 `CANRegister()` 完成注册，之后：
+先在 `main.c` 中调用 `BSP_CAN_Init()` 完成 CAN 底层初始化。  
+模块初始化时再调用 `CAN_Register()` 或兼容接口 `CANRegister()` 完成注册，之后：
 
 - 发送前向 `tx_buff` 填入数据
 - 通过 `CAN_SetDLC()` 或 `CANSetDLC()` 设置发送长度
@@ -25,7 +26,7 @@
 当前实现风格参考通用 module-instance 模式：
 
 - 使用全局实例表统一管理所有 CAN 实例
-- 第一次注册实例时自动拉起 CAN 服务
+- 在 `main.c` 中手动调用 `BSP_CAN_Init()` 拉起 CAN 服务
 - 接收中断统一从 FIFO 取包后，再按 `can_handle + rx_id` 分发给对应实例
 
 ## 类型定义
@@ -67,7 +68,7 @@ typedef struct {
 ## 外部接口
 
 ```c
-void CAN_Service_Init(void);
+void BSP_CAN_Init(void);
 void CAN_SetInterruptEnable(uint32_t interrupt_mask);
 CANInstance *CAN_Register(CAN_Init_Config_s *config);
 void CAN_SetDLC(CANInstance *instance, uint8_t length);
@@ -79,7 +80,7 @@ void CANSetDLC(CANInstance *instance, uint8_t length);
 uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 ```
 
-- `CAN_Service_Init()` 用于显式初始化 CAN 服务，建议在 `CAN_Register()` 前调用。
+- `BSP_CAN_Init()` 用于显式初始化 CAN 服务，建议在 `main.c` 中调用并早于 `CAN_Register()`。
 - `CAN_SetInterruptEnable()` 用于配置 TX/RX 中断开关，支持按位组合 `CAN_INTERRUPT_RX` 和 `CAN_INTERRUPT_TX`。
 - `CAN_Register()` 用于注册一个 CAN 实例。推荐在 module 初始化函数中调用。
 - `CAN_SetDLC()` 用于设置发送帧长度，当前经典 CAN 模式下支持 `1~8`。
@@ -100,7 +101,7 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 - 如果希望关闭 TX 中断但保留接收回调，传入 `CAN_INTERRUPT_RX` 即可。
 - 如果希望关闭全部中断，可以传入 `0U`。此时发送接口仍会轮询 TX 状态，但接收回调不会再靠中断触发。
 
-推荐在 `CAN_Service_Init()` 之前先设置中断策略；如果在初始化之后调用，驱动也会立即把新的屏蔽策略写回硬件。
+推荐在 `BSP_CAN_Init()` 之前先设置中断策略；如果在初始化之后调用，驱动也会立即把新的屏蔽策略写回硬件。
 
 常见用法：
 
@@ -108,13 +109,13 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 /* 如需只开 RX 中断 */
 
 CAN_SetInterruptEnable(CAN_INTERRUPT_RX);
-CAN_Service_Init();
+BSP_CAN_Init();
 ```
 
 ```c
 /* 需要发送完成/失败也走中断时 */
 CAN_SetInterruptEnable(CAN_INTERRUPT_ALL);
-CAN_Service_Init();
+BSP_CAN_Init();
 ```
 
 ```c
@@ -147,7 +148,7 @@ static uint8_t idx = 0U;
 
 主要私有函数包括：
 
-- `CANServiceInit()`
+- `BSP_CAN_Init()`
 - `CAN_SetInterruptEnable()`
 - `CAN_ConfigPins()`
 - `CAN_InitController()`
@@ -182,6 +183,7 @@ static uint8_t idx = 0U;
 ## 注意事项
 
 - 当前发送路径使用的是标准数据帧，推荐 `DLC <= 8`。
+- 当前实现要求先调用 `BSP_CAN_Init()`，再调用 `CAN_Register()`/`CANRegister()` 注册实例。
 - 默认同时打开 TX 和 RX 中断；如果应用层显式关闭 TX 中断，`CAN_Transmit()` 会改为轮询 TX 完成/失败状态。
 - 如果总线上没有其它有效节点给 ACK，发送邮箱可能会被自动重发占住，最终导致发送超时。
 - 如果某个任务周期要求非常严格，`timeout_ms` 不应设置过大，否则等待邮箱/等待发送结果的过程可能影响该任务的时序精度。

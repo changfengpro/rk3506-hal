@@ -14,38 +14,6 @@
 // #define RPMSG_TEST
 #define CAN_TEST
 
-#if defined(HAL_CANFD_MODULE_ENABLED)
-static void App_MaskBootEnabledNVICIrqs(void)
-{
-    uint32_t i;
-
-    for (i = 0U; i < (uint32_t)NUM_INTERRUPTS; i++) {
-        HAL_NVIC_DisableIRQ((IRQn_Type)i);
-        HAL_NVIC_ClearPendingIRQ((IRQn_Type)i);
-    }
-}
-
-static void App_QuietCanStaleIrqBeforeIntmux(void)
-{
-#if defined(HAL_CRU_MODULE_ENABLED)
-    HAL_CRU_ClkEnable(g_can0Dev.pclkGateID);
-    HAL_CRU_ClkEnable(g_can1Dev.pclkGateID);
-#endif
-    (void)HAL_CANFD_GetInterrupt(g_can0Dev.pReg);
-    (void)HAL_CANFD_GetInterrupt(g_can1Dev.pReg);
-    HAL_INTMUX_DisableIRQ(CAN0_IRQn);
-    HAL_INTMUX_DisableIRQ(CAN1_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_AP_0_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_AP_1_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_AP_2_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_AP_3_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_BB_0_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_BB_1_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_BB_2_IRQn);
-    HAL_INTMUX_DisableIRQ(MAILBOX_BB_3_IRQn);
-}
-#endif
-
 #ifdef RPMSG_TEST
 
 #define APP_RPMSG_LOCAL_EPT     0x4003U
@@ -144,10 +112,6 @@ int main(void)
 {
     HAL_Init();
     BSP_Init();
-#if defined(HAL_CANFD_MODULE_ENABLED)
-    App_MaskBootEnabledNVICIrqs();
-    // App_QuietCanStaleIrqBeforeIntmux();
-#endif
     BSP_UART_Init();
 
 #ifdef RPMSG_TEST
@@ -156,6 +120,7 @@ int main(void)
 #endif
 
 #ifdef CAN_TEST
+    BSP_CAN_Init();
     App_CanInit();
 #endif
     __enable_irq();

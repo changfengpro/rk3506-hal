@@ -97,6 +97,19 @@ volatile uint32_t g_canSclkHz[DEVICE_CAN_CNT] = {
 
 static HAL_Status CANINTMUXAdapter(uint32_t irq, void *args);
 
+/**
+ * @brief 屏蔽并清除启动阶段可能遗留的 NVIC 状态。
+ */
+static void CANMaskBootEnabledNVICIrqs(void)
+{
+    uint32_t i;
+
+    for (i = 0U; i < (uint32_t)NUM_INTERRUPTS; i++) {
+        HAL_NVIC_DisableIRQ((IRQn_Type)i);
+        HAL_NVIC_ClearPendingIRQ((IRQn_Type)i);
+    }
+}
+
 /* ----------------two static function called by CANRegister()-------------------- */
 
 /**
@@ -551,9 +564,9 @@ static HAL_Status CANINTMUXAdapter(uint32_t irq, void *args)
 /* ----------------------- two extern callable function ----------------------- */
 
 /**
- * @brief 在第一个 CAN 实例初始化的时候会自动调用此函数,启动 CAN 服务
+ * @brief 初始化 CAN 服务。
  */
-void CANServiceInit(void)
+void BSP_CAN_Init(void)
 {
     uint32_t i;
     struct CANFD_CONFIG can_cfg = { 0 };
@@ -561,6 +574,8 @@ void CANServiceInit(void)
     if (s_canServiceInitialized != 0U) {
         return;
     }
+
+    CANMaskBootEnabledNVICIrqs();
 
     can_cfg.canfdMode = 0U;
     can_cfg.bps = CANFD_BPS_1MBAUD;
@@ -609,7 +624,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     }
 
     if (s_canServiceInitialized == 0U) {
-        CANServiceInit();
+        return NULL;
     }
     if (idx >= CAN_MX_REGISTER_CNT) {
         return NULL;

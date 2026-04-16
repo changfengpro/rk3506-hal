@@ -42,7 +42,7 @@ typedef struct {
 /**
  * @brief 初始化 CAN 控制器、引脚和中断路由。
  */
-void CANServiceInit(void);
+void BSP_CAN_Init(void);
 
 /**
  * @brief 配置 CAN TX/RX 中断开关。
