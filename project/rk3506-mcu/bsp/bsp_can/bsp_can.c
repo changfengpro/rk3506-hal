@@ -104,15 +104,30 @@ static const uint8_t s_dlc2len[16] = {
 };
 
 /**
- * @brief 屏蔽并清除启动阶段可能遗留的 NVIC 状态。
+ * @brief 屏蔽并清除启动阶段可能遗留的 CAN 相关中断状态。
  */
 static void CANMaskBootEnabledNVICIrqs(void)
 {
     uint32_t i;
+    uint8_t outCleared[CAN_INTMUX_OUT_COUNT] = { 0U };
+    uint32_t intmuxStart = (uint32_t)NUM_INTERRUPTS + (uint32_t)INTMUX_IRQ_START_NUM;
 
-    for (i = 0U; i < (uint32_t)NUM_INTERRUPTS; i++) {
-        HAL_NVIC_DisableIRQ((IRQn_Type)i);
-        HAL_NVIC_ClearPendingIRQ((IRQn_Type)i);
+    for (i = 0U; i < DEVICE_CAN_CNT; i++) {
+        uint32_t irq = (uint32_t)s_canDevs[i]->irqNum;
+        uint32_t intmuxSrc = (irq >= intmuxStart) ? (irq - intmuxStart) : irq;
+        uint32_t outIdx = intmuxSrc / (uint32_t)INTMUX_NUM_INT_PER_OUT;
+
+        HAL_INTMUX_DisableIRQ(irq);
+        HAL_INTMUX_ClearPendingIRQ(irq);
+
+        if (outIdx < CAN_INTMUX_OUT_COUNT) {
+            IRQn_Type outIrq = (IRQn_Type)((uint32_t)INTMUX_OUT_IRQ_START_NUM + outIdx);
+
+            if (outCleared[outIdx] == 0U) {
+                HAL_NVIC_ClearPendingIRQ(outIrq);
+                outCleared[outIdx] = 1U;
+            }
+        }
     }
 }
 

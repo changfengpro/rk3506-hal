@@ -11,7 +11,7 @@
 
 #include <string.h>
 
-// #define RPMSG_TEST
+#define RPMSG_TEST
 #define CAN_TEST
 
 #ifdef RPMSG_TEST
