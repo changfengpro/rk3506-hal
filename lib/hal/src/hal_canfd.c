@@ -483,6 +483,8 @@ HAL_Status HAL_CANFD_Stop(struct CAN_REG *pReg)
 HAL_Status HAL_CANFD_Transmit(struct CAN_REG *pReg, struct CANFD_MSG *TxMsg)
 {
     uint8_t cmd = CAN_CMD_TX0_REQ_MASK;
+    uint8_t fullWords;
+    uint8_t remBytes;
     int i;
 
     HAL_ASSERT(IS_CAN_INSTANCE(pReg));
@@ -510,9 +512,23 @@ HAL_Status HAL_CANFD_Transmit(struct CAN_REG *pReg, struct CANFD_MSG *TxMsg)
 
     SET_BIT(pReg->FD_TXFRAMEINFO, CANFD_Len2Dlc(TxMsg->dlc));
 
-    for (i = 0; i < TxMsg->dlc / 4; i++) {
+    fullWords = TxMsg->dlc / 4U;
+    remBytes = TxMsg->dlc & 0x03U;
+
+    for (i = 0; i < fullWords; i++) {
         WRITE_REG(pReg->FD_TXDATA[i],
                   (TxMsg->data[i * 4] << 24) | (TxMsg->data[i * 4 + 1] << 16) | (TxMsg->data[i * 4 + 2] << 8) | TxMsg->data[i * 4 + 3]);
+    }
+    if (remBytes != 0U) {
+        uint32_t word = 0U;
+        uint8_t base = fullWords * 4U;
+        uint8_t j;
+
+        for (j = 0U; j < remBytes; j++) {
+            word |= (uint32_t)TxMsg->data[base + j] << (8U * (remBytes - 1U - j));
+        }
+
+        WRITE_REG(pReg->FD_TXDATA[fullWords], word);
     }
     WRITE_REG(pReg->CMD, cmd);
 
@@ -528,6 +544,8 @@ HAL_Status HAL_CANFD_Transmit(struct CAN_REG *pReg, struct CANFD_MSG *TxMsg)
 HAL_Status HAL_CANFD_Receive(struct CAN_REG *pReg, struct CANFD_MSG *RxMsg)
 {
     uint32_t info, id, len, data[16];
+    uint8_t fullWords;
+    uint8_t remBytes;
     int i = 0;
 
     HAL_ASSERT(IS_CAN_INSTANCE(pReg));
@@ -556,11 +574,24 @@ HAL_Status HAL_CANFD_Receive(struct CAN_REG *pReg, struct CANFD_MSG *RxMsg)
         RxMsg->stdId = id & 0x7ff;
     }
 
-    for (i = 0; i < RxMsg->dlc; i += 4) {
-        RxMsg->data[i] = (data[i / 4] & 0xff000000) >> 24;
-        RxMsg->data[i + 1] = (data[i / 4] & 0x00ff0000) >> 16;
-        RxMsg->data[i + 2] = (data[i / 4] & 0xff00) >> 8;
-        RxMsg->data[i + 3] = (data[i / 4] & 0xff);
+    fullWords = RxMsg->dlc / 4U;
+    remBytes = RxMsg->dlc & 0x03U;
+
+    for (i = 0; i < fullWords; i++) {
+        RxMsg->data[i * 4] = (data[i] & 0xff000000) >> 24;
+        RxMsg->data[i * 4 + 1] = (data[i] & 0x00ff0000) >> 16;
+        RxMsg->data[i * 4 + 2] = (data[i] & 0x0000ff00) >> 8;
+        RxMsg->data[i * 4 + 3] = data[i] & 0x000000ff;
+    }
+
+    if (remBytes != 0U) {
+        uint32_t word = data[fullWords];
+        uint8_t base = fullWords * 4U;
+        uint8_t j;
+
+        for (j = 0U; j < remBytes; j++) {
+            RxMsg->data[base + j] = (word >> (8U * (remBytes - 1U - j))) & 0xFFU;
+        }
     }
 
     return HAL_OK;
