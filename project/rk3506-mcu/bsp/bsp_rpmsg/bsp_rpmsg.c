@@ -254,7 +254,7 @@ static int32_t RPMsg_WaitLinkUp(uint32_t timeoutMs)
  * 当前默认按 RK3506 MCU(remote) <-> Linux(master) 拓扑初始化，
  * 并等待链路建立完成。
  */
-void RPMsg_Service_Init(void)
+void BSP_RPMSG_Init(void)
 {
     uint32_t shmemSize;
     void *shmemBase;
@@ -294,17 +294,7 @@ void RPMsg_Service_Init(void)
     s_rpmsgServiceInitialized = 1U;
 }
 
-/**
- * @brief 轮询处理 RPMsg mailbox 兜底流程。
- */
-void RPMsg_Service_Poll(void)
-{
-    if (s_rpmsgServiceInitialized == 0U) {
-        return;
-    }
 
-    RPMsg_ServicePendingMailbox();
-}
 
 /**
  * @brief 查询 RPMsg 链路是否已建立。

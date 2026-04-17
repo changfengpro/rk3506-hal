@@ -6,7 +6,7 @@
 #include "hal_bsp.h"
 #include "hal_base.h"
 #include "bsp_uart.h"
-#include "bsp_rpmsg.h"
+#include "rpmsg.h"
 #include "bsp_can.h"
 
 #include <string.h>
@@ -18,35 +18,59 @@
 
 #define APP_RPMSG_LOCAL_EPT     0x4003U
 #define APP_RPMSG_SERVICE_NAME  "rpmsg-mcu0-test"
-#define APP_RPMSG_REPLY_MSG     "mcu ack"
+#define APP_RPMSG_MOTOR_CNT     1U
+#define APP_RPMSG_TEMP_C        35
 
-static RPMsgInstance *g_rpmsgIns;
+static RPMsgFrameInstance *g_rpmsgIns;
 
-static void App_RPMsgCallback(RPMsgInstance *ins)
+
+static void RobotInit()
 {
-    uint32_t txLen;
+    // 关闭中断,防止在初始化过程中发生中断
+    __disable_irq();
 
-    if (ins == NULL) {
+    BSP_UART_Init();
+    BSP_CAN_Init();
+    BSP_RPMSG_Init();
+    
+    __enable_irq();
+}
+
+static void App_RPMsgCallback(RPMsgFrameInstance *ins)
+{
+    FrameCommand_t command;
+    MotorState_t state;
+
+    if ((ins == NULL) || (RPMsgFrameGetCommand(ins, &command, 1U) == 0U)) {
         return;
     }
 
-    txLen = (uint32_t)strlen(APP_RPMSG_REPLY_MSG) + 1U;
-    memcpy(ins->tx_buff, APP_RPMSG_REPLY_MSG, txLen);
-    RPMsg_SetTxLen(ins, txLen);
-    (void)RPMsg_Transmit(ins, RL_BLOCK);
+    memset(&state, 0, sizeof(state));
+    state.temperature_c = APP_RPMSG_TEMP_C;
+    if (command.motor_count > 0U) {
+        state.motor_id = command.motors[0].motor_id;
+        state.position_q16 = command.motors[0].target_position_q16;
+        state.velocity_q16 = command.motors[0].target_velocity_q16;
+        state.torque_q8 = command.motors[0].target_torque_q8;
+        state.status_flags = command.motors[0].ctrl_flags;
+    }
+
+    (void)RPMsgFrameSetTelemetryMotorState(ins, 0U, &state);
+    (void)RPMsgFrameTransmitTelemetry(ins, HAL_GetTick(), RL_BLOCK);
 }
 
 static void App_RPMsgInit(void)
 {
-    RPMsg_Init_Config_s config;
+    RPMsgFrame_Init_Config_s config;
 
     memset(&config, 0, sizeof(config));
     config.local_ept = APP_RPMSG_LOCAL_EPT;
     config.remote_ept = RPMSG_REMOTE_EPT_DYNAMIC;
     config.ept_name = APP_RPMSG_SERVICE_NAME;
-    config.rpmsg_module_callback = App_RPMsgCallback;
+    config.telemetry_motor_count = APP_RPMSG_MOTOR_CNT;
+    config.rpmsg_frame_callback = App_RPMsgCallback;
 
-    g_rpmsgIns = RPMsg_Register(&config);
+    g_rpmsgIns = RPMsgFrameInit(&config);
     HAL_ASSERT(g_rpmsgIns != NULL);
 }
 
@@ -98,9 +122,7 @@ static void App_CanSendTest(void)
     g_canIns->tx_buff[6] = 0x03U;
     g_canIns->tx_buff[7] = 0x04U;
 
-    if (CANTransmit(g_canIns, 1000U) != 0U) {
-        HAL_DBG("can tx ok\n");
-    } else {
+    if (CANTransmit(g_canIns, 1000U) == 0U) {
         HAL_DBG_ERR("can tx err\n");
     }
 
@@ -113,23 +135,22 @@ int main(void)
     HAL_Init();
     BSP_Init();
     HAL_INTMUX_Init();
-    BSP_UART_Init();
+    
+    RobotInit();
 
 #ifdef RPMSG_TEST
-    RPMsg_Service_Init();
     App_RPMsgInit();
 #endif
 
 #ifdef CAN_TEST
-    BSP_CAN_Init();
+
     App_CanInit();
 #endif
-    __enable_irq();
 
     while (1) {
 #ifdef CAN_TEST
         App_CanSendTest();
-        HAL_DelayMs(1000);
+        HAL_DelayMs(1);
 #endif
     }
 }

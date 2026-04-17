@@ -43,14 +43,7 @@ typedef struct {
  * 当前默认按 RK3506 MCU(remote) <-> Linux(master) 拓扑初始化，
  * 并等待链路建立完成。
  */
-void RPMsg_Service_Init(void);
-
-/**
- * @brief 轮询处理 RPMsg mailbox 兜底流程。
- *
- * 建议在主循环中周期调用，用于在极端情况下兜底消费 mailbox 中断。
- */
-void RPMsg_Service_Poll(void);
+void BSP_RPMSG_Init(void);
 
 /**
  * @brief 查询 RPMsg 链路是否已建立。
