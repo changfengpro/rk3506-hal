@@ -112,6 +112,7 @@ int main(void)
 {
     HAL_Init();
     BSP_Init();
+    HAL_INTMUX_Init();
     BSP_UART_Init();
 
 #ifdef RPMSG_TEST
