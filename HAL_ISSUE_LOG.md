@@ -140,3 +140,66 @@
   - `AA BB CC DD EE`
   - `AA BB CC DD EE FF 11`
   - `AA BB CC DD EE FF 11 22`
+
+---
+
+## [2026-04-17] RK3506 CAN 单帧接收偶发触发中断风暴
+
+### 现象
+
+- USB2CAN 侧只发送一次 `cansend can0 201#AABBCCDD`。
+- MCU 侧串口却持续刷 `can rx ok`，看起来像“单帧触发了无数次接收中断”。
+- 同一套代码有时又只触发一次，现场表现不稳定。
+- 用 J-Link 停机抓现场时，PC 常落在 `HAL_UART_SerialOutChar()`，说明 CPU 主要耗在重复打印接收日志。
+
+### 影响
+
+- 单次接收报文会被业务层重复处理。
+- 串口日志被大量重复输出淹没，正常现象难以观察。
+- 由于现象受上电状态和寄存器残留影响，容易误判为“USB2CAN 抖动”或“HAL_CANFD_Receive 仍然有问题”。
+
+### 根因
+
+- 文件：`project/rk3506-mcu/bsp/bsp_can/bsp_can.c`
+- `CANInitController()` 里没有显式恢复 RK3506 RX 路径依赖的 3 个控制器本地寄存器：
+  - `RXINT_CTRL`
+  - `WAVE_FILTER_CFG`
+  - `ATF_CTL`
+- 因此程序行为依赖于 CAN 控制器当前残留值：
+  - 如果寄存器碰巧保留了之前的“好值”，单帧接收表现正常。
+  - 如果寄存器回到默认/坏值，就会出现 RX 存储区长期显示非空、接收中断反复重入。
+- J-Link 抓到的坏现场寄存器为：
+  - `CAN0->INT = 0x00000081`
+  - `CAN0->STR_STATE = 0x0080FE04`
+  - `CAN0->RXINT_CTRL = 0x00000100`
+  - `CAN0->WAVE_FILTER_CFG = 0x00000308`
+  - `CAN0->ATF_CTL = 0x00000000`
+- 其中 `STR_STATE` 明显不合理：
+  - `INTM_EMPTY = 0`
+  - `INTM_LEFT_CNT = 254`
+  - `INTM_FRAME_CNT = 64`
+- 在这组寄存器状态下，单帧接收后内部 RX 存储一直显示“还有数据”，`RX_FINISH`/`RXSTR_FULL` 会持续出现，最终导致 `can rx ok` 无限刷屏。
+
+### 修复
+
+- 文件：`project/rk3506-mcu/bsp/bsp_can/bsp_can.c`
+- 在 `CANInitController()` 的 `HAL_CANFD_Start()` 之后，显式写入稳定版本配置：
+  - `WAVE_FILTER_CFG = 0`
+  - `RXINT_CTRL = 1`
+  - `ATF_CTL = ATF0_EN`
+- 这样每次初始化都会把 RX 路径拉回已验证过的稳定状态，不再依赖寄存器残留值。
+
+### 验证要点
+
+- 用 J-Link 在坏现场手工把 3 个寄存器改为：
+  - `RXINT_CTRL = 1`
+  - `WAVE_FILTER_CFG = 0`
+  - `ATF_CTL = ATF0_EN`
+- 修改后，串口输出会立刻从“持续刷 `can rx ok`”收敛到正常节奏。
+- 随后再次单发 `cansend can0 201#AABBCCDD`，MCU 侧只出现一次 `can rx ok`。
+- J-Link 复查修复后寄存器状态：
+  - `CAN0->INT = 0x00000000`
+  - `CAN0->STR_STATE = 0x00000005`
+  - `CAN0->RXINT_CTRL = 0x00000001`
+  - `CAN0->WAVE_FILTER_CFG = 0x00000000`
+  - `CAN0->ATF_CTL = 0x00000001`

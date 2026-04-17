@@ -304,6 +304,15 @@ static void CANInitController(const struct HAL_CANFD_DEV *dev, struct CANFD_CONF
         return;
     }
 
+    /*
+     * RK3506 RX path depends on these controller-local settings. If we leave
+     * them at reset / residual values, a single received frame can keep
+     * INTM non-empty and retrigger RX interrupts indefinitely.
+     */
+    WRITE_REG(dev->pReg->WAVE_FILTER_CFG, 0U);
+    WRITE_REG(dev->pReg->RXINT_CTRL, 1U);
+    WRITE_REG(dev->pReg->ATF_CTL, CAN_ATF_CTL_ATF0_EN_MASK);
+
     WRITE_REG(dev->pReg->INT_MASK, CAN_INT_VALID_MASK);
     WRITE_REG(dev->pReg->INT, CAN_INT_VALID_MASK);
 
