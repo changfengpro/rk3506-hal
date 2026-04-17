@@ -203,3 +203,53 @@
   - `CAN0->RXINT_CTRL = 0x00000001`
   - `CAN0->WAVE_FILTER_CFG = 0x00000000`
   - `CAN0->ATF_CTL = 0x00000001`
+
+---
+
+## [2026-04-18] 仅使用 BSP_RPMSG_Init 时 Linux 与 MCU RPMsg 不通信
+
+### 现象
+
+- 按要求放弃 `App_RPMsgTryInit()`，改为仅在启动阶段使用 `BSP_RPMSG_Init()`。
+- Linux 侧 `rpmsg_frame` 能连接到 `/dev/rpmsg0`，但一段时间内 `rpmsg_fps.log` 显示 `TX/RX = 0`。
+- J-Link 现场采样显示 RPMsg 服务状态长期未完成：`s_rpmsgServiceInitialized = 0`。
+
+### 影响
+
+- Linux 命令帧发出后 MCU 不回遥测，双方表现为“设备节点存在但业务不通”。
+- 调试上容易误判为 mailbox 或 virtio 驱动异常，增加排障时间。
+
+### 根因
+
+- 关键根因 1：`HAL_ASSERT` 在当前构建配置下可能展开为空宏。
+  - 代码若写成 `HAL_ASSERT(BSP_RPMSG_Init() == 1U)` / `HAL_ASSERT(App_RPMsgInit() == 1U)`，
+    初始化调用本身会被优化掉（副作用丢失）。
+  - 结果是 RPMsg 初始化链路未真实执行。
+- 关键根因 2：启动阶段若严格等待 link-up，App 侧 endpoint 注册时机会被阻塞，
+  在 Linux 启动时序波动时容易长时间看起来“不通”。
+
+### 修复
+
+- 文件：`project/rk3506-mcu/src/main.c`
+  - 改为“先调用再断言”：
+    - `rpmsgInitOk = BSP_RPMSG_Init(); HAL_ASSERT(rpmsgInitOk == 1U);`
+    - `rpmsgModuleOk = App_RPMsgInit(); HAL_ASSERT(rpmsgModuleOk == 1U);`
+  - 保留“只使用 BSP_RPMSG_Init”的初始化策略，未恢复 `App_RPMsgTryInit()` 轮询兜底。
+- 文件：`project/rk3506-mcu/bsp/bsp_rpmsg/bsp_rpmsg.c`
+  - `BSP_RPMSG_Init()` 调整为：先完成 `rpmsg_ns_bind`，再等待 link-up。
+  - `RPMsg_WaitLinkUp` 超时只打印错误并继续初始化流程，不再阻塞启动。
+
+### 验证要点（SSH + J-Link 闭环）
+
+- 编译：`project/rk3506-mcu/GCC` 下 `make -j12` 通过。
+- 烧录后 J-Link 采样（同一版固件）：
+  - 修复前阶段可见 `s_rpmsgServiceInitialized = 0`。
+  - Linux 持续发送命令帧后，`s_rpmsgServiceInitialized` 变为 `1`，`s_rpmsgInstanceIdx` 由 `0` 变 `1`。
+- Linux 侧执行 `/root/rpmsg_frame ...` 后，`/root/rpmsg_fps.log` 出现稳定收发：
+  - `TX` / `RX` 约 `95~97 fps`
+  - `DROP = 0`
+
+### 经验总结
+
+- 在本工程配置中，`HAL_ASSERT` 不能包裹带副作用调用。
+- 所有关键初始化应采用“显式调用 + 断言/日志分离”的写法，避免 release 构建被优化掉。

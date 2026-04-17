@@ -3,7 +3,7 @@
  * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
  */
 
-#include "rpmsg.h"
+#include "rpmsg_frame.h"
 
 #include <stddef.h>
 #include <stdlib.h>

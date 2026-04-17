@@ -6,8 +6,9 @@
 #include "hal_bsp.h"
 #include "hal_base.h"
 #include "bsp_uart.h"
-#include "rpmsg.h"
+#include "rpmsg_frame.h"
 #include "bsp_can.h"
+#include "bsp_rpmsg.h"
 
 #include <string.h>
 
@@ -26,13 +27,17 @@ static RPMsgFrameInstance *g_rpmsgIns;
 
 static void RobotInit()
 {
-    // 关闭中断,防止在初始化过程中发生中断
-    __disable_irq();
+    uint8_t rpmsgInitOk;
 
     BSP_UART_Init();
     BSP_CAN_Init();
-    BSP_RPMSG_Init();
-    
+
+    rpmsgInitOk = BSP_RPMSG_Init();
+    HAL_ASSERT(rpmsgInitOk == 1U);
+    if (rpmsgInitOk == 0U) {
+        HAL_DBG_ERR("bsp rpmsg init failed\n");
+    }
+
     __enable_irq();
 }
 
@@ -59,7 +64,7 @@ static void App_RPMsgCallback(RPMsgFrameInstance *ins)
     (void)RPMsgFrameTransmitTelemetry(ins, HAL_GetTick(), RL_BLOCK);
 }
 
-static void App_RPMsgInit(void)
+static uint8_t App_RPMsgInit(void)
 {
     RPMsgFrame_Init_Config_s config;
 
@@ -71,8 +76,15 @@ static void App_RPMsgInit(void)
     config.rpmsg_frame_callback = App_RPMsgCallback;
 
     g_rpmsgIns = RPMsgFrameInit(&config);
-    HAL_ASSERT(g_rpmsgIns != NULL);
+    if (g_rpmsgIns == NULL) {
+        return 0U;
+    }
+
+    HAL_DBG("app rpmsg frame ready\n");
+    return 1U;
 }
+
+
 
 #endif
 
@@ -132,6 +144,8 @@ static void App_CanSendTest(void)
 
 int main(void)
 {
+    uint8_t rpmsgModuleOk;
+
     HAL_Init();
     BSP_Init();
     HAL_INTMUX_Init();
@@ -139,7 +153,11 @@ int main(void)
     RobotInit();
 
 #ifdef RPMSG_TEST
-    App_RPMsgInit();
+    rpmsgModuleOk = App_RPMsgInit();
+    HAL_ASSERT(rpmsgModuleOk == 1U);
+    if (rpmsgModuleOk == 0U) {
+        HAL_DBG_ERR("app rpmsg module init failed\n");
+    }
 #endif
 
 #ifdef CAN_TEST
@@ -150,8 +168,9 @@ int main(void)
     while (1) {
 #ifdef CAN_TEST
         App_CanSendTest();
-        HAL_DelayMs(1);
 #endif
+
+        HAL_DelayMs(1);
     }
 }
 

@@ -253,45 +253,55 @@ static int32_t RPMsg_WaitLinkUp(uint32_t timeoutMs)
  *
  * 当前默认按 RK3506 MCU(remote) <-> Linux(master) 拓扑初始化，
  * 并等待链路建立完成。
+ *
+ * @return 1 表示初始化成功，0 表示初始化失败（可由上层重试）。
  */
-void BSP_RPMSG_Init(void)
+uint8_t BSP_RPMSG_Init(void)
 {
     uint32_t shmemSize;
     void *shmemBase;
 
     if (s_rpmsgServiceInitialized != 0U) {
-        return;
+        return 1U;
     }
 
-    shmemBase = RPMsg_GetSharedMemoryBase();
-    shmemSize = RPMsg_GetSharedMemorySize();
+    if (s_rpmsgInstance == NULL) {
+        shmemBase = RPMsg_GetSharedMemoryBase();
+        shmemSize = RPMsg_GetSharedMemorySize();
 
-    HAL_ASSERT(shmemBase != NULL);
-    HAL_ASSERT(shmemSize >= RPMSG_POOL_SIZE);
+        HAL_ASSERT(shmemBase != NULL);
+        HAL_ASSERT(shmemSize >= RPMSG_POOL_SIZE);
 
-    RPMsg_QuietStaleIrqs();
+        RPMsg_QuietStaleIrqs();
 
-    s_rpmsgInstance = rpmsg_lite_remote_init(shmemBase,
-                                             RL_PLATFORM_SET_LINK_ID(RPMSG_MASTER_ID, RPMSG_REMOTE_ID),
-                                             RL_NO_FLAGS);
-    HAL_ASSERT(s_rpmsgInstance != NULL);
+        s_rpmsgInstance = rpmsg_lite_remote_init(shmemBase,
+                                                 RL_PLATFORM_SET_LINK_ID(RPMSG_MASTER_ID, RPMSG_REMOTE_ID),
+                                                 RL_NO_FLAGS);
+        if (s_rpmsgInstance == NULL) {
+            HAL_DBG_ERR("rpmsg remote init failed\n");
+            return 0U;
+        }
 
-    __enable_irq();
+        __enable_irq();
+    }
 
-    if (RPMsg_WaitLinkUp(RPMSG_LINK_WAIT_TIMEOUT_MS) != 0) {
-        HAL_DBG_ERR("rpmsg link: 0\n");
-        while (1) {
-            RPMsg_ServicePendingMailbox();
-            HAL_DelayMs(1000);
+    if (s_rpmsgNsHandle == NULL) {
+        s_rpmsgNsHandle = rpmsg_ns_bind(s_rpmsgInstance, RPMsg_DefaultNsBindCallback, NULL);
+        if (s_rpmsgNsHandle == NULL) {
+            HAL_DBG_ERR("rpmsg ns bind failed\n");
+            return 0U;
         }
     }
 
-    HAL_DBG("rpmsg link: 1\n");
-
-    s_rpmsgNsHandle = rpmsg_ns_bind(s_rpmsgInstance, RPMsg_DefaultNsBindCallback, NULL);
-    HAL_ASSERT(s_rpmsgNsHandle != NULL);
+    if (RPMsg_WaitLinkUp(RPMSG_LINK_WAIT_TIMEOUT_MS) != 0) {
+        HAL_DBG_ERR("rpmsg link wait timeout, continue init\n");
+    } else {
+        HAL_DBG("rpmsg link: 1\n");
+    }
 
     s_rpmsgServiceInitialized = 1U;
+
+    return 1U;
 }
 
 

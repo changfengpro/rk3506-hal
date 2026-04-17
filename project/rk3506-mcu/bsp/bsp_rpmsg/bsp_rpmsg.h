@@ -42,8 +42,10 @@ typedef struct {
  *
  * 当前默认按 RK3506 MCU(remote) <-> Linux(master) 拓扑初始化，
  * 并等待链路建立完成。
+ *
+ * @return 1 表示初始化成功，0 表示初始化失败（可由上层重试）。
  */
-void BSP_RPMSG_Init(void);
+uint8_t BSP_RPMSG_Init(void);
 
 /**
  * @brief 查询 RPMsg 链路是否已建立。
