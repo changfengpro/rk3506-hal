@@ -18,6 +18,7 @@ extern const struct HAL_CANFD_DEV g_can1Dev;
 #define CAN_SCLK_24M_MAX_HZ     25000000U
 #define CAN_RX_DRAIN_LIMIT      16U
 #define CAN_CLASSIC_DLC_MAX     8U
+#define CAN_ATF_SLOT_COUNT      5U
 #define CAN_INTMUX_OUT_COUNT    INTMUX_NUM_OUT_PER_CON
 #define CAN_INT_VALID_MASK      0x000FFFFFU
 
@@ -311,7 +312,7 @@ static void CANInitController(const struct HAL_CANFD_DEV *dev, struct CANFD_CONF
      */
     WRITE_REG(dev->pReg->WAVE_FILTER_CFG, 0U);
     WRITE_REG(dev->pReg->RXINT_CTRL, 1U);
-    WRITE_REG(dev->pReg->ATF_CTL, CAN_ATF_CTL_ATF0_EN_MASK);
+    WRITE_REG(dev->pReg->ATF_CTL, 0x1FU);
 
     WRITE_REG(dev->pReg->INT_MASK, CAN_INT_VALID_MASK);
     WRITE_REG(dev->pReg->INT, CAN_INT_VALID_MASK);
@@ -321,16 +322,56 @@ static void CANInitController(const struct HAL_CANFD_DEV *dev, struct CANFD_CONF
 }
 
 /**
- * @brief 添加过滤器以实现对特定id的报文的接收,会被CANRegister()调用
+ * @brief 为注册实例分配一个 RK3506 CAN 硬件接收过滤槽。
  *
- * @note RK3506 当前接收路径采用“统一取包 + 软件分发”的方式，
- *       这里保留注册阶段入口，便于接口风格和后续扩展保持一致。
+ * @note 每个 CAN 控制器独立维护 ATF[5] 过滤槽。
+ *       每注册一个实例，就占用一个槽位，并将该槽配置成
+ *       “仅匹配 instance->rx_id 的标准帧”。
  *
  * @param instance can instance owned by specific module
  */
 static void CANAddFilter(CANInstance *instance)
 {
-    (void)instance;
+    static uint8_t can0_filter_idx = 0U;
+    static uint8_t can1_filter_idx = 0U;
+    uint8_t *filter_idx;
+    uint32_t slot;
+    uint32_t atfCtl;
+
+    if ((instance == NULL) || (instance->can_handle == NULL)) {
+        return;
+    }
+
+    if (instance->can_handle == g_can0Dev.pReg) {
+        filter_idx = &can0_filter_idx;
+    } else if (instance->can_handle == g_can1Dev.pReg) {
+        filter_idx = &can1_filter_idx;
+    } else {
+        return;
+    }
+
+    slot = *filter_idx;
+    if (slot >= CAN_ATF_SLOT_COUNT) {
+        return;
+    }
+
+    /*
+     * RK3576/RK3506 ATF list mode is closest to the old bxCAN IDLIST usage:
+     * one hardware slot keeps two exact IDs. We write the same rx_id twice so
+     * this slot only accepts the target standard ID.
+     *
+     * ATF_CTL bit semantics follow the Linux driver:
+     * a bit value of 1 disables the corresponding filter slot.
+     */
+    WRITE_REG(instance->can_handle->ATF[slot], instance->rx_id & CAN_ATF0_ID_MASK);
+    WRITE_REG(instance->can_handle->ATFM[slot],
+              (instance->rx_id & CAN_ATFM0_ID_MASK) | CAN_ATFM0_MASK_MASK);
+
+    atfCtl = READ_REG(instance->can_handle->ATF_CTL);
+    atfCtl &= ~(1UL << slot);
+    WRITE_REG(instance->can_handle->ATF_CTL, atfCtl);
+
+    *filter_idx = (uint8_t)(slot + 1U);
 }
 
 /**
@@ -391,6 +432,15 @@ static void CANDispatchRxMessage(struct CAN_REG *pReg, const struct CANFD_MSG *r
     }
 }
 
+volatile uint32_t g_can_cnt = 0U; /* for debug */
+volatile uint32_t g_can_rx_irq_cnt = 0U; /* for debug */
+volatile uint32_t g_can_last_rx_std_id = 0U; /* for debug */
+volatile uint32_t g_can_last_rx_dlc = 0U; /* for debug */
+volatile uint8_t g_can_last_rx_data[8] = { 0U }; /* for debug */
+volatile uint32_t g_can_irq_entry_cnt = 0U; /* for debug */
+volatile uint32_t g_can_last_isr = 0U; /* for debug */
+volatile uint32_t g_can_last_str_state = 0U; /* for debug */
+
 /**
  * @brief 尽快取空当前接收 FIFO 中的报文。
  * @param pReg CAN 控制器基址。
@@ -402,6 +452,8 @@ static void CANDrainRxFifo(struct CAN_REG *pReg)
     while (guard++ < CAN_RX_DRAIN_LIMIT) {
         uint32_t strState = READ_REG(pReg->STR_STATE);
         struct CANFD_MSG rx_msg = { 0 };
+
+        g_can_last_str_state = strState;
 
         /*
          * On RK3506 the INTM_FRAME_CNT field reflects storage occupancy,
@@ -417,12 +469,20 @@ static void CANDrainRxFifo(struct CAN_REG *pReg)
         }
 
         if (rx_msg.ide == CANFD_ID_STANDARD) {
+            uint8_t copyLen = rx_msg.dlc;
+
+            g_can_rx_irq_cnt++;
+            g_can_last_rx_std_id = rx_msg.stdId;
+            g_can_last_rx_dlc = rx_msg.dlc;
+            if (copyLen > sizeof(g_can_last_rx_data)) {
+                copyLen = sizeof(g_can_last_rx_data);
+            }
+            memset((void *)g_can_last_rx_data, 0, sizeof(g_can_last_rx_data));
+            memcpy((void *)g_can_last_rx_data, rx_msg.data, copyLen);
             CANDispatchRxMessage(pReg, &rx_msg);
         }
     }
 }
-
-volatile uint32_t g_can_cnt = 0U; /* for debug */
 
 /**
  * @brief 处理单个 CAN 控制器的发送中断。
@@ -458,6 +518,9 @@ static void CANCommonIRQHandler(struct CAN_REG *pReg)
 {
     uint32_t isr = HAL_CANFD_GetInterrupt(pReg);
 
+    g_can_irq_entry_cnt++;
+    g_can_last_isr = isr;
+
     if (((s_canInterruptEnableMask & CAN_INTERRUPT_TX) != 0U) &&
         ((isr & CAN_TX_EVENT_MASK) != 0U)) {
         CANTxIRQHandler(pReg, isr);
@@ -470,61 +533,6 @@ static void CANCommonIRQHandler(struct CAN_REG *pReg)
 }
 
 /**
- * @brief INTMUX 输出 0 中断入口。
- */
-static void CAN_INTMUX_OUT0_IRQHandler(void)
-{
-    HAL_INTMUX_DirectDispatch(0U);
-}
-
-/**
- * @brief INTMUX 输出 1 中断入口。
- */
-static void CAN_INTMUX_OUT1_IRQHandler(void)
-{
-    HAL_INTMUX_DirectDispatch(1U);
-}
-
-/**
- * @brief INTMUX 输出 2 中断入口。
- */
-static void CAN_INTMUX_OUT2_IRQHandler(void)
-{
-    HAL_INTMUX_DirectDispatch(2U);
-}
-
-/**
- * @brief INTMUX 输出 3 中断入口。
- */
-static void CAN_INTMUX_OUT3_IRQHandler(void)
-{
-    HAL_INTMUX_DirectDispatch(3U);
-}
-
-/**
- * @brief 获取 INTMUX 输出中断对应的实际 ISR。
- * @param outIrq INTMUX 输出中断号。
- * @return NVIC_IRQHandler。
- */
-static NVIC_IRQHandler CANGetIntmuxOutIRQHandler(IRQn_Type outIrq)
-{
-    if (outIrq == INTMUX_OUT0_IRQn) {
-        return CAN_INTMUX_OUT0_IRQHandler;
-    }
-    if (outIrq == INTMUX_OUT1_IRQn) {
-        return CAN_INTMUX_OUT1_IRQHandler;
-    }
-    if (outIrq == INTMUX_OUT2_IRQn) {
-        return CAN_INTMUX_OUT2_IRQHandler;
-    }
-    if (outIrq == INTMUX_OUT3_IRQn) {
-        return CAN_INTMUX_OUT3_IRQHandler;
-    }
-
-    return NULL;
-}
-
-/**
  * @brief 配置当前 CAN 使用到的 INTMUX 输出中断。
  * @param srcIrq CAN 源中断号。
  */
@@ -532,11 +540,10 @@ static void CANConfigIntmuxOutputIRQ(uint32_t srcIrq)
 {
     uint32_t outIdx = CANGetIntmuxOutIndex(srcIrq);
     IRQn_Type outIrq = CANGetIntmuxOutIRQ(srcIrq);
-    NVIC_IRQHandler handler = CANGetIntmuxOutIRQHandler(outIrq);
     uint32_t i;
     uint32_t startIrq;
 
-    if ((outIdx >= CAN_INTMUX_OUT_COUNT) || (handler == NULL)) {
+    if (outIdx >= CAN_INTMUX_OUT_COUNT) {
         return;
     }
 
@@ -550,7 +557,6 @@ static void CANConfigIntmuxOutputIRQ(uint32_t srcIrq)
         HAL_INTMUX_DisableIRQ(startIrq + i);
     }
 
-    HAL_NVIC_SetIRQHandler(outIrq, handler);
     HAL_NVIC_ClearPendingIRQ(outIrq);
     HAL_NVIC_SetPriority(outIrq, 1U, 0U);
     HAL_NVIC_EnableIRQ(outIrq);

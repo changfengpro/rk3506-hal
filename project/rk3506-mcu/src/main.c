@@ -108,6 +108,7 @@ static uint8_t App_RPMsgInit(void)
         return 0U;
     }
 
+    HAL_NVIC_SetPriority(INTMUX_OUT3_IRQn, 1U, 0U);
     HAL_DBG("app rpmsg frame ready\n");
     return 1U;
 }
@@ -126,6 +127,66 @@ volatile uint32_t g_appCanTxCnt;
 volatile uint32_t g_appCanTxErrCnt;
 volatile uint32_t g_appCanRxCnt;
 
+static void App_CanSwapBytesPerWord(uint8_t *dst, const uint8_t *src, uint8_t len)
+{
+    uint8_t base;
+
+    for (base = 0U; base < len; base = (uint8_t)(base + 4U)) {
+        uint8_t i;
+        uint8_t remain = (uint8_t)(len - base);
+        uint8_t chunk = (remain < 4U) ? remain : 4U;
+
+        for (i = 0U; i < chunk; i++) {
+            dst[base + i] = src[base + (chunk - 1U - i)];
+        }
+    }
+}
+
+static void App_CanSendTestISR(void)
+{
+    static uint8_t counter = 0U;
+    struct CANFD_MSG tx_msg = { 0 };
+    uint8_t raw_payload[8];
+    uint32_t cmd_state;
+
+    if (g_canIns == NULL) {
+        return;
+    }
+
+    cmd_state = READ_REG(g_canIns->can_handle->CMD);
+    if ((cmd_state & (CAN_CMD_TX0_REQ_MASK | CAN_CMD_TX1_REQ_MASK)) ==
+        (CAN_CMD_TX0_REQ_MASK | CAN_CMD_TX1_REQ_MASK)) {
+        g_appCanTxErrCnt++;
+        return;
+    }
+
+    raw_payload[0] = 0xA5U;
+    raw_payload[1] = 0x5AU;
+    raw_payload[2] = counter;
+    raw_payload[3] = (uint8_t)(~counter);
+    raw_payload[4] = 0x01U;
+    raw_payload[5] = 0x02U;
+    raw_payload[6] = 0x03U;
+    raw_payload[7] = 0x04U;
+
+    memcpy(g_canIns->tx_buff, raw_payload, sizeof(raw_payload));
+
+    tx_msg.stdId = g_canIns->tx_id;
+    tx_msg.ide = CANFD_ID_STANDARD;
+    tx_msg.rtr = CANFD_RTR_DATA;
+    tx_msg.fdf = CANFD_FORMAT;
+    tx_msg.dlc = 8U;
+    App_CanSwapBytesPerWord(tx_msg.data, raw_payload, tx_msg.dlc);
+
+    if (HAL_CANFD_Transmit(g_canIns->can_handle, &tx_msg) != HAL_OK) {
+        g_appCanTxErrCnt++;
+        return;
+    }
+
+    g_appCanTxCnt++;
+    counter++;
+}
+
 static void App_CanCallback(CANInstance *ins)
 {
     (void)ins;
@@ -143,39 +204,24 @@ static void App_CanInit(void)
     config.rx_id = APP_CAN_RX_ID;
     config.can_module_callback = App_CanCallback;
 
-    CANSetInterruptEnable(CAN_INTERRUPT_RX);
+    CANSetInterruptEnable(CAN_INTERRUPT_ALL);
     g_canIns = CANRegister(&config);
     HAL_ASSERT(g_canIns != NULL);
     CANSetDLC(g_canIns, 8U);
-}
 
-static void App_CanSendTest(void)
-{
-    static uint8_t counter = 0U;
-
-    if (g_canIns == NULL) {
-        return;
-    }
-
-    g_canIns->tx_buff[0] = 0xA5U;
-    g_canIns->tx_buff[1] = 0x5AU;
-    g_canIns->tx_buff[2] = counter;
-    g_canIns->tx_buff[3] = (uint8_t)(~counter);
-    g_canIns->tx_buff[4] = 0x01U;
-    g_canIns->tx_buff[5] = 0x02U;
-    g_canIns->tx_buff[6] = 0x03U;
-    g_canIns->tx_buff[7] = 0x04U;
-
-    if (CANTransmit(g_canIns, 1000U) == 0U) {
-        g_appCanTxErrCnt++;
-        HAL_DBG_ERR("can tx err\n");
-        return;
-    }
-
-    g_appCanTxCnt++;
-    counter++;
+    HAL_SYSTICK_Init();
+    HAL_NVIC_SetPriority(SysTick_IRQn, 2U, 0U);
 }
 #endif
+
+void SysTick_Handler(void)
+{
+    HAL_SYSTICK_IRQHandler();
+
+#ifdef CAN_TEST
+    App_CanSendTestISR();
+#endif
+}
 
 int main(void)
 {
@@ -201,10 +247,7 @@ int main(void)
 #endif
 
     while (1) {
-#ifdef CAN_TEST
-        App_CanSendTest();
-#endif
-        HAL_DelayMs(1);
+        __WFI();
     }
 }
 

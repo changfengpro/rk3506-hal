@@ -414,3 +414,83 @@
   - 是否有依赖该头文件的对象文件未重编
   - 是否存在同一固件内的新旧结构体布局混用
 - 对协议类头文件，构建系统必须具备 `.d` 依赖文件追踪，否则很容易出现隐蔽 ABI 问题。
+
+---
+
+## [2026-04-18] RPMsg 与 CAN 并发时 CAN RX 不触发（INTMUX OUT0 分发链路被错误接管）
+
+### 现象
+
+- MCU 工程同时打开 `RPMSG_TEST` 与 `CAN_TEST`。
+- Linux 板端 `/root/rpmsg_frame -i 7 -T HT04 -m TORQUE -p 1.0 -v -0.5 -t 1.25` 能稳定运行。
+- Linux 侧 `rpmsg_fps.log` 长时间稳定显示 `TX/RX` 同步，约 `459~462 fps`，`DROP = 0`。
+- 主机侧 `candump can0` 能持续看到 MCU 发出的 `0x200` 报文，说明 `CAN TX` 正常。
+- 但主机侧单发 `cansend can0 201#...` 后，MCU 侧 `App_CanCallback()` 不进入，`g_appCanRxCnt` 不增长，看起来像“CAN 只能发不能收”。
+
+### 影响
+
+- RPMsg 与 CAN 并发联调时，表面上像是 RPMsg 正常、CAN 半瘫痪。
+- 由于 `CAN TX` 明明正常，现场很容易先怀疑过滤器、波特率、USB2CAN 或业务回调，而不是中断分发本身。
+- 如果只看总线波形，不看 MCU 内部计数，排障会反复绕圈。
+
+### 根因
+
+- 文件：`project/rk3506-mcu/bsp/bsp_can/bsp_can.c`
+- 当时 `bsp_can` 接管了 `INTMUX_OUT0_IRQn` 等 `INTMUX_OUTx` 中断入口，改成走自定义 `CAN_INTMUX_OUTx_IRQHandler()`。
+- 这层自定义入口内部再调用 `HAL_INTMUX_DirectDispatch()`，但现场固件实际走到的这条调用链没有把中断真正分发到 `CANINTMUXAdapter()`。
+- 因此坏现场会出现非常迷惑的状态：
+  - `CAN0->INT` 已经挂着 `RX_FINISH`
+  - `INTMUX->INT_FLAG_GROUP` 已经置位
+  - NVIC 侧对应 `INTMUX_OUT0_IRQn` 也 pending
+  - 但 `CANINTMUXAdapter()` 和 `App_CanCallback()` 仍然不执行
+- 同一轮联调中，还需要把 `CANAddFilter()` 真正落成 RK3506 的硬件 `ATF` 精确过滤，而不是空函数占位。这样每个 `CANInstance` 都能按 `rx_id` 分配独立的硬件过滤槽，接收行为与旧 bxCAN `IDLIST` 习惯保持一致。
+
+### 修复
+
+- 文件：`project/rk3506-mcu/bsp/bsp_can/bsp_can.c`
+- 不再由 `bsp_can` 覆盖 `INTMUX_OUT0/1/2/3_IRQn` 的 NVIC handler。
+- `CANConfigIntmuxOutputIRQ()` 不再调用 `HAL_NVIC_SetIRQHandler()` 强行接管 `INTMUX_OUTx`。
+- 恢复 HAL 默认分发路径：
+  - `HAL_INTMUX_OUTx_Handler() -> INTMUX_Dispatch()`
+  - 再由 `HAL_INTMUX_SetIRQHandler(dev->irqNum, CANINTMUXAdapter, NULL)` 把源中断交给 CAN BSP
+- `CANAddFilter()` 改为按控制器维护 RK3506 硬件 `ATF` 槽位：
+  - `CAN0/CAN1` 各自维护 `filter_idx`
+  - 每注册一个实例，就写入一组 `ATF[slot] / ATFM[slot]`
+  - 清 `ATF_CTL` 对应 bit，启用该槽位
+  - 实现对 `instance->rx_id` 的标准帧精确匹配
+
+### 验证要点
+
+- Linux 板端启动后，`/root/rpmsg_fps.log` 稳定出现：
+  - `TX: 462 fps | RX: 462 fps | DROP: 0`
+  - `TX: 460 fps | RX: 460 fps | DROP: 0`
+- 主机侧 `candump -L can0,200:7FF` 持续看到 MCU 发包，例如：
+  - `can0 200#A55A7B8401020304`
+  - `can0 200#A55A7C8301020304`
+- 主机侧执行：
+  - `cansend can0 201#1122334455667788`
+- 随后用 J-Link 读取 MCU 变量，可见：
+  - `g_can_last_rx_data = 44 33 22 11 88 77 66 55`
+  - `g_can_last_rx_dlc = 8`
+  - `g_can_last_rx_std_id = 0x201`
+  - `g_can_rx_irq_cnt` 增长
+  - `g_appCanRxCnt` 增长
+- 再执行：
+  - `cansend can0 201#DEADBEEF01020304`
+- J-Link 再次读取，可见：
+  - `g_can_last_rx_data = EF BE AD DE 04 03 02 01`
+  - `g_can_rx_irq_cnt` 与 `g_appCanRxCnt` 再次增长
+- 这证明：
+  - RPMsg 并发运行未受影响
+  - CAN `TX` 持续正常
+  - CAN `RX` 已经真正走通到 MCU 业务回调
+
+### 经验总结
+
+- 在 RK3506 这套 HAL 里，`INTMUX OUT` 中断不要被 BSP 私自接管，优先复用 HAL 默认 `HAL_INTMUX_OUTx_Handler()`。
+- 判断 CAN 接收是否真的打通，不能只看总线和 pending 位，最好同时看 MCU 侧：
+  - `g_can_last_rx_data`
+  - `g_can_last_rx_std_id`
+  - `g_can_rx_irq_cnt`
+  - `g_appCanRxCnt`
+- 修改固件后再做 J-Link 变量读取时，要以当前 `TestDemo.elf` 重新取地址，不能沿用旧版符号地址。
