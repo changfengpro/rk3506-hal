@@ -253,3 +253,164 @@
 
 - 在本工程配置中，`HAL_ASSERT` 不能包裹带副作用调用。
 - 所有关键初始化应采用“显式调用 + 断言/日志分离”的写法，避免 release 构建被优化掉。
+
+---
+
+## [2026-04-18] RPMsg 初始联调不通（Linux 先启动时假连接导致 MCU 长期收不到命令）
+
+### 现象
+
+- 这是本轮 RPMsg 联调最开始遇到的首个问题。
+- 按“先启动 Linux 侧 `/root/rpmsg_frame`，再启动 MCU”顺序测试 RPMsg。
+- Linux 侧很快打印：
+  - `[Linux] 已连接到 /dev/rpmsg0，监听 MCU(16387) -> LOCAL(1024)`
+- 但 MCU 串口同时可见：
+  - `rpmsg link wait timeout, continue init`
+  - `RPMsg announce failed, ept=...`
+- 此时 MCU 侧 `g_appRpmsgCmdCnt = 0`，`App_RPMsgCallback()` 不触发。
+- Linux 侧旧版工具在现场可能表现为：
+  - `rpmsg_fps.log` 长时间 `TX/RX = 0`
+  - 或者保持一个“节点已连上但业务不通”的状态。
+
+### 影响
+
+- Linux 看起来“已有 `/dev/rpmsg0` 且已连接”，但该连接并不一定对应本次新启动的 MCU 实例。
+- 调试时容易误判为 MCU 解包逻辑、CRC、mailbox 或 endpoint 地址配置错误。
+- 现场如果只盯 `/dev/rpmsg0` 是否存在，很难第一时间定位到“stale endpoint / stale vring”问题。
+
+### 根因
+
+- Linux 先启动时，`rpmsg_frame` 可能连到旧的 RPMsg endpoint / 旧的 virtio 状态。
+- 这个 stale 连接会让用户态看到“connected”，但业务侧并没有真正和当前这次启动的 MCU endpoint 建立闭环。
+- 因此在坏现场中会出现两类表象：
+  - Linux 侧读写看起来已打开，但 `TX/RX` 都不动。
+  - MCU 侧 `g_appRpmsgCmdCnt`、`g_dbgLastRpmsgCommand`、`g_dbgLastRpmsgState` 长期不变。
+- 本质上不是 `rpmsg_frame` 协议字段错误，而是 Linux 侧 endpoint / vring 状态没有和当前 MCU 实例对齐。
+
+### 修复
+
+- 文件：`/home/rmer/Project/Linux/vanxoak_rk3506_board_support/User/rpmsg_frame.c`
+- 对 Linux 测试工具增加两类增强：
+  - 新增逐帧遥测落盘：
+    - `FRAME_DATA_LOG_FILE = "rpmsg_frame_data.log"`
+    - 每收到一帧 `FrameTelemetry_t`，记录 `seq/timestamp/motor_count/motor_id/position/velocity/torque/temp/flags/raw hex`
+  - 新增“假连接”自愈：
+    - 增加 `tx_attempt_count`
+    - 若 endpoint 已连接，且连续 `2` 秒存在发送尝试但没有任何有效接收，则自动：
+      - `close_session()`
+      - `force_kernel_rebind()`
+      - 重新连接 endpoint
+- 自愈触发日志为：
+  - `[Recovery] endpoint connected but no valid RX for 2 s (tx_ok=0, tx_attempt=479), force rebind.`
+
+### MCU 侧可观测性增强
+
+- 文件：`project/rk3506-mcu/src/main.c`
+- 为避免 `-O2` 下 `g_rpmsgIns` 在观察窗口显示 `<outofscope>`，增加调试变量：
+  - `g_dbgRpmsgIns`
+  - `g_dbgLastRpmsgCommand`
+  - `g_dbgLastRpmsgState`
+- 在 `App_RPMsgCallback()` 中：
+  - 收到并成功解码命令帧后，先保存 `g_dbgLastRpmsgCommand`
+  - 回包成功后，再保存 `g_dbgLastRpmsgState`
+- 这样即使 IDE 无法直接观察 `g_rpmsgIns`，仍能从全局变量读取最后一次实际收发内容。
+
+### 验证要点（先 Linux 后 MCU 场景）
+
+- Linux 侧先启动：
+  - `/root/rpmsg_frame -i 7 -p 65536 -v -12345 -t 321 -k 11 -d 22 -f 0xA55A`
+- 在 MCU 尚未真正接上时，Linux 侧先复现坏现场：
+  - `TX = 0`
+  - `RX = 0`
+  - `rpmsg_frame_data.log` 仅有头行，无业务帧
+- 随后 Linux 侧自动触发自愈，日志应出现：
+  - `endpoint connected but no valid RX for 2 s ... force rebind`
+  - `驱动已刷新，Linux Vring 指针已重置`
+- 自愈后恢复为稳定收发：
+  - `TX` / `RX` 约 `434~436 fps`
+  - `DROP = 0`
+- Linux 侧逐帧日志成功记录 MCU 回包，例如：
+  - `m0{id=7 pos=65536 vel=-12345 torque=321 temp=35 flags=0xA55A}`
+- 与此同时，J-Link 读取 MCU 侧计数可见：
+  - `g_appRpmsgCmdCnt` 持续增长
+  - `g_appRpmsgTxCnt` 持续增长
+  - `g_appRpmsgTxErrCnt = 0`
+
+### 经验总结
+
+- 在 RPMsg 联调中，“用户态看到 `/dev/rpmsg0` 已连接”不等于“当前 MCU 实例已经真正建立业务闭环”。
+- 对“Linux 先起、MCU 后起”这类时序，最好让 Linux 侧工具具备 stale endpoint 检测与自动 `unbind/bind` 自愈能力。
+- 若观察窗口里 `g_rpmsgIns` 显示 `<outofscope>`，优先改看显式保留的调试全局变量，而不是据此判断实例未创建。
+
+---
+
+## [2026-04-18] RPMsg 帧电机数量从 4 扩到 20 后 MCU 进入 HardFault
+
+### 现象
+
+- 将 `project/rk3506-mcu/modules/rpmsg_frame/rpmsg_frame.h` 中的
+  `RPMSG_FRAME_MAX_MOTOR_CNT` 从 `4U` 改为 `20U` 后，Linux 与 MCU 重新联调时 MCU 会异常跑飞。
+- 现场可见：
+  - Linux 侧 `/root/rpmsg_frame` 能连接 `/dev/rpmsg0`，但早期长时间 `RX = 0`
+  - MCU 侧业务不工作，J-Link 停机时可能落到 `HardFault_Handler / Default_Handler`
+  - 旧版 `TestDemo.elf` 反汇编中，`App_RPMsgCallback()` 仍然表现为旧 4 路帧布局
+- 关键现场证据：
+  - 修复前 `App_RPMsgCallback()` 反汇编仍是 `cmp r3, #4`
+  - 同时栈帧只有 `sub sp, #68`
+
+### 影响
+
+- Linux 下发 RPMsg 命令帧后，MCU 在接收/解包路径上就可能触发栈破坏并进入 HardFault。
+- 由于 Linux 侧节点和 endpoint 可能仍然存在，表面上看像是“RPMsg 能连上但业务偶发不通”，容易误判成 payload、CRC 或 mailbox 问题。
+- 修改帧定义后，如果仍依赖旧的增量构建结果，后续同类问题还会重复出现。
+
+### 根因
+
+- 真实根因不是 RPMsg payload 超限。
+  - 当前 `FrameCommand_t` 与 `FrameTelemetry_t` 在 `20U` 配置下仍小于 `RL_BUFFER_PAYLOAD_SIZE`
+- 根因是 MCU 构建系统缺少头文件依赖追踪：
+  - `rpmsg_frame.h` 修改后，`rpmsg_frame.o` 重编了
+  - 但 `main.o` 没有因为依赖该头文件而自动重编
+- 结果导致同一版固件里出现 ABI / 结构体布局失配：
+  - `RPMsgFrameGetCommandFrame()` 按新 `FrameCommand_t` 大小拷贝
+  - `main.c` 中 `App_RPMsgCallback()` 里的局部变量 `FrameCommand_t command` 仍按旧 4 路大小分配栈空间
+- 该失配直接导致：
+  - 新帧数据拷贝覆盖旧栈缓冲区
+  - 栈被破坏
+  - MCU 进入 HardFault
+
+### 修复
+
+- 文件：`project/rk3506-mcu/GCC/Makefile`
+- 为 MCU 工程补上头文件依赖生成与包含：
+  - `CFLAGS += -MMD -MP`
+  - `-include $(OBJS:.o=.d)`
+- 随后执行一次真正的全量重编：
+  - `make clean && make -j12`
+- 这样当 `rpmsg_frame.h` 再次变更时，`main.o`、`rpmsg_frame.o` 等依赖对象都会同步重建，不再出现新旧帧布局混编。
+
+### 验证要点
+
+- 反汇编验证修复前后差异：
+  - 修复前：`App_RPMsgCallback()` 中仍有 `cmp r3, #4`，且栈帧为 `sub sp, #68`
+  - 修复后：变为 `cmp r3, #20`，且栈帧扩展为 `sub sp, #276`
+- J-Link 在线检查：
+  - 修复后 MCU 不再停在 `HardFault_Handler`
+  - 现场一次停机采样显示 `IPSR = 000 (NoException)`，PC 落在正常延时路径 `HAL_TIMER_GetCount`
+  - `g_rpmsgIns` 为非空有效地址
+- Linux 实测收发恢复正常：
+  - `/root/rpmsg_frame -i 7 -T HT04 -m TORQUE -p 1.5 -v -0.18837 -t 1.25`
+  - `rpmsg_fps.log` 稳定出现：
+    - `TX: 322 fps | RX: 258 fps | DROP: 0`
+    - `TX: 260 fps | RX: 260 fps | DROP: 0`
+- 临时探针版 Linux 工具还抓到了 MCU 实际回帧内容：
+  - `seq=950 ts=1522139 motor_count=1 crc=0xDF5C`
+  - `id=7 pos=98304 vel=-12345 torque=320 temp=35 flags=0x0000`
+
+### 经验总结
+
+- 在这个工程里，修改协议头文件后不能盲信增量编译结果，尤其是结构体直接参与跨模块拷贝时。
+- 若现场出现“改了数组长度/帧定义后，逻辑看似能编过但 MCU 一跑就 HardFault”，应优先排查：
+  - 是否有依赖该头文件的对象文件未重编
+  - 是否存在同一固件内的新旧结构体布局混用
+- 对协议类头文件，构建系统必须具备 `.d` 依赖文件追踪，否则很容易出现隐蔽 ABI 问题。

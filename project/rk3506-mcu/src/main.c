@@ -22,13 +22,7 @@
 #define APP_RPMSG_MOTOR_CNT     1U
 #define APP_RPMSG_TEMP_C        35
 
-static RPMsgFrameInstance *g_rpmsgIns;
-volatile uint32_t g_appRpmsgCmdCnt;
-volatile uint32_t g_appRpmsgTxCnt;
-volatile uint32_t g_appRpmsgTxErrCnt;
-volatile RPMsgFrameInstance *g_dbgRpmsgIns;
-volatile FrameCommand_t g_dbgLastRpmsgCommand;
-volatile FrameTelemetry_t g_dbgLastRpmsgState;
+RPMsgFrameInstance *g_rpmsgIns;
 
 
 static void RobotInit()
@@ -80,7 +74,7 @@ static void App_RPMsgBuildStateFrame(RPMsgFrameInstance *ins, const FrameCommand
         motorState->velocity_q16 = motorCmd->target_velocity_q16;
         motorState->torque_q8 = motorCmd->target_torque_q8;
         motorState->temperature_c = APP_RPMSG_TEMP_C;
-        motorState->status_flags = motorCmd->ctrl_flags;
+        motorState->status_flags = 0U;
     }
 }
 
@@ -92,17 +86,10 @@ static void App_RPMsgCallback(RPMsgFrameInstance *ins)
         return;
     }
 
-    g_dbgRpmsgIns = ins;
-    memcpy((void *)&g_dbgLastRpmsgCommand, &command, sizeof(command));
-    g_appRpmsgCmdCnt++;
     App_RPMsgBuildStateFrame(ins, &command);
     if (RPMsgFrameTransmitStateFrame(ins, HAL_GetTick(), RL_BLOCK) == 0U) {
-        g_appRpmsgTxErrCnt++;
         return;
     }
-
-    memcpy((void *)&g_dbgLastRpmsgState, &ins->state_frame, sizeof(ins->state_frame));
-    g_appRpmsgTxCnt++;
 }
 
 static uint8_t App_RPMsgInit(void)
@@ -117,7 +104,6 @@ static uint8_t App_RPMsgInit(void)
     config.command_callback = App_RPMsgCallback;
 
     g_rpmsgIns = RPMsgFrameInit(&config);
-    g_dbgRpmsgIns = g_rpmsgIns;
     if (g_rpmsgIns == NULL) {
         return 0U;
     }
