@@ -11,7 +11,6 @@ extern uint32_t __linux_share_rpmsg_end__[];
 #define RPMSG_MASTER_ID          0U
 #define RPMSG_REMOTE_ID          3U
 #define RPMSG_POOL_SIZE          (2UL * RL_VRING_OVERHEAD)
-#define RPMSG_CAN_INT_ALL_MASK   0x000FFFFFU
 
 static struct rpmsg_lite_instance *s_rpmsgInstance = NULL;
 static rpmsg_ns_handle s_rpmsgNsHandle = NULL;
@@ -193,22 +192,8 @@ static uint32_t RPMsg_GetSharedMemorySize(void)
  */
 static void RPMsg_QuietStaleIrqs(void)
 {
-#if defined(HAL_CANFD_MODULE_ENABLED)
-#if defined(HAL_CRU_MODULE_ENABLED)
-    HAL_CRU_ClkEnable(g_can0Dev.pclkGateID);
-    HAL_CRU_ClkEnable(g_can1Dev.pclkGateID);
-#endif
-    WRITE_REG(CAN0->INT_MASK, RPMSG_CAN_INT_ALL_MASK);
-    WRITE_REG(CAN0->INT, RPMSG_CAN_INT_ALL_MASK);
-    WRITE_REG(CAN1->INT_MASK, RPMSG_CAN_INT_ALL_MASK);
-    WRITE_REG(CAN1->INT, RPMSG_CAN_INT_ALL_MASK);
-    HAL_INTMUX_DisableIRQ(CAN0_IRQn);
-    HAL_INTMUX_DisableIRQ(CAN1_IRQn);
-#endif
-
-    HAL_NVIC_ClearPendingIRQ(INTMUX_OUT0_IRQn);
-    HAL_NVIC_ClearPendingIRQ(INTMUX_OUT1_IRQn);
-    HAL_NVIC_ClearPendingIRQ(INTMUX_OUT2_IRQn);
+    HAL_INTMUX_ClearPendingIRQ(MAILBOX_BB_3_IRQn);
+    HAL_NVIC_ClearPendingIRQ(INTMUX_OUT3_IRQn);
 }
 
 /**
