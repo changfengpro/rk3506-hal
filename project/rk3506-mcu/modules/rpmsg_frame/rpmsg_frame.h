@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
+ * Copyright (c) 2022 changfengpro
+ *
+ * RPMsg frame protocol definitions for robot command and telemetry exchange.
  */
 
 #ifndef __FRAME_RPMSG_H

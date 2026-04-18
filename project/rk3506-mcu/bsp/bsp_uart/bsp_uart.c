@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2022 changfengpro
+ *
+ * UART BSP for debug console initialization and stdio redirection.
+ */
+
 #include "bsp_uart.h"
 
 // 内部使用的 UART 寄存器基址指针

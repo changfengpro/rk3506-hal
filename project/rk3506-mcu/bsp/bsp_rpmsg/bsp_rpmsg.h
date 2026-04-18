@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2022 changfengpro
+ *
+ * RPMsg BSP interface: link state, endpoint registration and frame TX/RX APIs.
+ */
+
 #ifndef __BSP_RPMSG_H
 #define __BSP_RPMSG_H
 

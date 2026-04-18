@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2022 changfengpro
+ *
+ * RPMsg BSP service: link bring-up, endpoint registration and TX/RX dispatch.
+ */
+
 #include "bsp_rpmsg.h"
 
 #include <stdlib.h>
