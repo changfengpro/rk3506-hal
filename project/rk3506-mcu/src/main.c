@@ -23,6 +23,12 @@
 #define APP_RPMSG_TEMP_C        35
 
 static RPMsgFrameInstance *g_rpmsgIns;
+volatile uint32_t g_appRpmsgCmdCnt;
+volatile uint32_t g_appRpmsgTxCnt;
+volatile uint32_t g_appRpmsgTxErrCnt;
+volatile RPMsgFrameInstance *g_dbgRpmsgIns;
+volatile FrameCommand_t g_dbgLastRpmsgCommand;
+volatile FrameTelemetry_t g_dbgLastRpmsgState;
 
 
 static void RobotInit()
@@ -31,37 +37,72 @@ static void RobotInit()
 
     BSP_UART_Init();
     BSP_CAN_Init();
-
     rpmsgInitOk = BSP_RPMSG_Init();
     HAL_ASSERT(rpmsgInitOk == 1U);
     if (rpmsgInitOk == 0U) {
         HAL_DBG_ERR("bsp rpmsg init failed\n");
     }
 
+
     __enable_irq();
+}
+
+static void App_RPMsgBuildStateFrame(RPMsgFrameInstance *ins, const FrameCommand_t *command)
+{
+    FrameTelemetry_t *stateFrame;
+    uint8_t motorIdx;
+    uint8_t motorCount;
+
+    if ((ins == NULL) || (command == NULL)) {
+        return;
+    }
+
+    stateFrame = RPMsgFrameGetStateFrame(ins);
+    if (stateFrame == NULL) {
+        return;
+    }
+
+    RPMsgFrameResetStateFrame(ins);
+
+    motorCount = command->motor_count;
+    if (motorCount > RPMSG_FRAME_MAX_MOTOR_CNT) {
+        motorCount = RPMSG_FRAME_MAX_MOTOR_CNT;
+    }
+
+    stateFrame->motor_count = motorCount;
+
+    for (motorIdx = 0U; motorIdx < motorCount; motorIdx++) {
+        const MotorCmd_t *motorCmd = &command->motors[motorIdx];
+        MotorState_t *motorState = &stateFrame->motors[motorIdx];
+
+        motorState->motor_id = motorCmd->motor_id;
+        motorState->position_q16 = motorCmd->target_position_q16;
+        motorState->velocity_q16 = motorCmd->target_velocity_q16;
+        motorState->torque_q8 = motorCmd->target_torque_q8;
+        motorState->temperature_c = APP_RPMSG_TEMP_C;
+        motorState->status_flags = motorCmd->ctrl_flags;
+    }
 }
 
 static void App_RPMsgCallback(RPMsgFrameInstance *ins)
 {
     FrameCommand_t command;
-    MotorState_t state;
 
-    if ((ins == NULL) || (RPMsgFrameGetCommand(ins, &command, 1U) == 0U)) {
+    if ((ins == NULL) || (RPMsgFrameGetCommandFrame(ins, &command, 1U) == 0U)) {
         return;
     }
 
-    memset(&state, 0, sizeof(state));
-    state.temperature_c = APP_RPMSG_TEMP_C;
-    if (command.motor_count > 0U) {
-        state.motor_id = command.motors[0].motor_id;
-        state.position_q16 = command.motors[0].target_position_q16;
-        state.velocity_q16 = command.motors[0].target_velocity_q16;
-        state.torque_q8 = command.motors[0].target_torque_q8;
-        state.status_flags = command.motors[0].ctrl_flags;
+    g_dbgRpmsgIns = ins;
+    memcpy((void *)&g_dbgLastRpmsgCommand, &command, sizeof(command));
+    g_appRpmsgCmdCnt++;
+    App_RPMsgBuildStateFrame(ins, &command);
+    if (RPMsgFrameTransmitStateFrame(ins, HAL_GetTick(), RL_BLOCK) == 0U) {
+        g_appRpmsgTxErrCnt++;
+        return;
     }
 
-    (void)RPMsgFrameSetTelemetryMotorState(ins, 0U, &state);
-    (void)RPMsgFrameTransmitTelemetry(ins, HAL_GetTick(), RL_BLOCK);
+    memcpy((void *)&g_dbgLastRpmsgState, &ins->state_frame, sizeof(ins->state_frame));
+    g_appRpmsgTxCnt++;
 }
 
 static uint8_t App_RPMsgInit(void)
@@ -72,10 +113,11 @@ static uint8_t App_RPMsgInit(void)
     config.local_ept = APP_RPMSG_LOCAL_EPT;
     config.remote_ept = RPMSG_REMOTE_EPT_DYNAMIC;
     config.ept_name = APP_RPMSG_SERVICE_NAME;
-    config.telemetry_motor_count = APP_RPMSG_MOTOR_CNT;
-    config.rpmsg_frame_callback = App_RPMsgCallback;
+    config.state_motor_count = APP_RPMSG_MOTOR_CNT;
+    config.command_callback = App_RPMsgCallback;
 
     g_rpmsgIns = RPMsgFrameInit(&config);
+    g_dbgRpmsgIns = g_rpmsgIns;
     if (g_rpmsgIns == NULL) {
         return 0U;
     }
@@ -94,10 +136,14 @@ static uint8_t App_RPMsgInit(void)
 #define APP_CAN_RX_ID  0x201U
 
 static CANInstance *g_canIns;
+volatile uint32_t g_appCanTxCnt;
+volatile uint32_t g_appCanTxErrCnt;
+volatile uint32_t g_appCanRxCnt;
 
 static void App_CanCallback(CANInstance *ins)
 {
     (void)ins;
+    g_appCanRxCnt++;
     HAL_DBG("can rx ok\n");
 }
 
@@ -135,9 +181,12 @@ static void App_CanSendTest(void)
     g_canIns->tx_buff[7] = 0x04U;
 
     if (CANTransmit(g_canIns, 1000U) == 0U) {
+        g_appCanTxErrCnt++;
         HAL_DBG_ERR("can tx err\n");
+        return;
     }
 
+    g_appCanTxCnt++;
     counter++;
 }
 #endif
@@ -169,7 +218,6 @@ int main(void)
 #ifdef CAN_TEST
         App_CanSendTest();
 #endif
-
         HAL_DelayMs(1);
     }
 }

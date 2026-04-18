@@ -8,8 +8,7 @@
 
 #include "bsp_rpmsg.h"
 
-#define RPMSG_FRAME_MX_REGISTER_CNT 4U
-#define RPMSG_FRAME_MAX_MOTOR_CNT   4U
+#define RPMSG_FRAME_MAX_MOTOR_CNT 4U
 
 typedef struct __attribute__((packed)) {
 	uint8_t motor_id;
@@ -53,14 +52,14 @@ struct RPMsgFrameInstance {
 	RPMsgInstance *rpmsg_ins;
 	uint16_t tx_seq;
 	uint16_t last_rx_seq;
-	uint8_t new_command_ready;
-	FrameTelemetry_t tx_frame;
-	FrameCommand_t rx_frame;
+	uint8_t has_new_command;
+	FrameTelemetry_t state_frame;
+	FrameCommand_t command_frame;
 	uint32_t tx_ok_cnt;
 	uint32_t tx_err_cnt;
 	uint32_t rx_ok_cnt;
 	uint32_t rx_drop_cnt;
-	RPMsgFrame_Callback rpmsg_frame_callback;
+	RPMsgFrame_Callback command_callback;
 	void *id;
 };
 
@@ -68,8 +67,8 @@ typedef struct {
 	uint32_t local_ept;
 	uint32_t remote_ept;
 	const char *ept_name;
-	uint8_t telemetry_motor_count;
-	RPMsgFrame_Callback rpmsg_frame_callback;
+	uint8_t state_motor_count;
+	RPMsgFrame_Callback command_callback;
 	void *id;
 } RPMsgFrame_Init_Config_s;
 
@@ -85,31 +84,26 @@ typedef struct {
 RPMsgFrameInstance *RPMsgFrameInit(RPMsgFrame_Init_Config_s *config);
 
 /**
- * @brief 设置遥测帧中的电机数量。
+ * @brief 清空当前状态帧内容，但保留电机数量配置。
  * @param instance RPMsg 业务实例。
- * @param motor_count 电机数量，范围 0~RPMSG_FRAME_MAX_MOTOR_CNT。
  */
-void RPMsgFrameSetTelemetryMotorCount(RPMsgFrameInstance *instance, uint8_t motor_count);
+void RPMsgFrameResetStateFrame(RPMsgFrameInstance *instance);
 
 /**
- * @brief 设置遥测帧中某个电机状态。
+ * @brief 获取可由 App 层填充的状态帧缓冲区。
  * @param instance RPMsg 业务实例。
- * @param motor_idx 电机索引。
- * @param state 电机状态。
- * @return 设置成功返回 1，失败返回 0。
+ * @return 返回当前状态帧指针，失败返回 NULL。
  */
-uint8_t RPMsgFrameSetTelemetryMotorState(RPMsgFrameInstance *instance,
-										  uint8_t motor_idx,
-										  const MotorState_t *state);
+FrameTelemetry_t *RPMsgFrameGetStateFrame(RPMsgFrameInstance *instance);
 
 /**
- * @brief 发送遥测帧。
+ * @brief 发送状态帧。
  * @param instance RPMsg 业务实例。
  * @param timestamp_ms 帧时间戳。
  * @param timeout_ms 发送等待超时时间。
  * @return 发送成功返回 1，失败返回 0。
  */
-uint8_t RPMsgFrameTransmitTelemetry(RPMsgFrameInstance *instance,
+uint8_t RPMsgFrameTransmitStateFrame(RPMsgFrameInstance *instance,
 									 uint32_t timestamp_ms,
 									 uint32_t timeout_ms);
 
@@ -124,11 +118,11 @@ uint8_t RPMsgFrameHasNewCommand(RPMsgFrameInstance *instance);
  * @brief 获取最近一次通过 CRC 校验的命令帧。
  * @param instance RPMsg 业务实例。
  * @param command 输出命令帧缓冲区。
- * @param clear_new_flag 是否在读取后清除 new_command_ready 标记。
+ * @param clear_new_flag 是否在读取后清除 has_new_command 标记。
  * @return 获取成功返回 1，失败返回 0。
  */
-uint8_t RPMsgFrameGetCommand(RPMsgFrameInstance *instance,
-							  FrameCommand_t *command,
-							  uint8_t clear_new_flag);
+uint8_t RPMsgFrameGetCommandFrame(RPMsgFrameInstance *instance,
+								  FrameCommand_t *command,
+								  uint8_t clear_new_flag);
 
 #endif /* __FRAME_RPMSG_H */

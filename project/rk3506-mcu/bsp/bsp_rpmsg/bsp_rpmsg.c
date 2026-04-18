@@ -157,9 +157,9 @@ static void RPMsg_AnnounceEndpoint(RPMsgInstance *instance)
 
     ret = rpmsg_ns_announce(s_rpmsgInstance, instance->ept, instance->ept_name, RL_NS_CREATE);
     if (ret != RL_SUCCESS) {
-        HAL_DBG_ERR("RPMsg announce failed, ept=%lu, ret=%ld\n",
-                    (unsigned long)instance->local_ept,
-                    (long)ret);
+        HAL_DBG_ERR("RPMsg announce failed, ept=%u, ret=%d\n",
+                    (unsigned int)instance->local_ept,
+                    (int)ret);
     }
 }
 
@@ -361,8 +361,8 @@ RPMsgInstance *RPMsg_Register(RPMsg_Init_Config_s *config)
                                           RPMsg_RxCallback,
                                           instance);
     if (instance->ept == NULL) {
-        HAL_DBG_ERR("RPMsg create ept failed, local_ept=%lu\n",
-                    (unsigned long)instance->local_ept);
+        HAL_DBG_ERR("RPMsg create ept failed, local_ept=%u\n",
+                    (unsigned int)instance->local_ept);
         free(instance);
         return NULL;
     }
@@ -434,8 +434,8 @@ uint8_t RPMsg_Transmit(RPMsgInstance *instance, uint32_t timeout_ms)
     }
 
     if (remoteEpt == RPMSG_REMOTE_EPT_DYNAMIC) {
-        HAL_DBG_ERR("RPMsg remote ept unresolved, local_ept=%lu\n",
-                    (unsigned long)instance->local_ept);
+        HAL_DBG_ERR("RPMsg remote ept unresolved, local_ept=%u\n",
+                    (unsigned int)instance->local_ept);
         return 0U;
     }
 
@@ -446,10 +446,10 @@ uint8_t RPMsg_Transmit(RPMsgInstance *instance, uint32_t timeout_ms)
                           instance->tx_len,
                           timeout_ms);
     if (ret != RL_SUCCESS) {
-        HAL_DBG_ERR("RPMsg send failed, local=%lu, remote=%lu, ret=%ld\n",
-                    (unsigned long)instance->local_ept,
-                    (unsigned long)remoteEpt,
-                    (long)ret);
+        HAL_DBG_ERR("RPMsg send failed, local=%u, remote=%u, ret=%d\n",
+                    (unsigned int)instance->local_ept,
+                    (unsigned int)remoteEpt,
+                    (int)ret);
         return 0U;
     }
 

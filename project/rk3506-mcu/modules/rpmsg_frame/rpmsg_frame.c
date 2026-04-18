@@ -9,11 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static uint8_t idx = 0U; /* register idx，模块全局实例索引，在注册时使用 */
-/* RPMsg 实例池，此处仅保存指针，实例内存在 RPMsgFrameInit 时通过 malloc 分配 */
-static RPMsgFrameInstance *rpmsg_frame_instance[RPMSG_FRAME_MX_REGISTER_CNT] = { NULL };
-
-
 /**
  * @brief 计算 CRC16-CCITT(FALSE) 校验值。
  * @param data 输入数据。
@@ -50,7 +45,7 @@ static uint16_t RPMsgFrameCalcCrc16(const uint8_t *data, uint32_t len)
  * @param instance RPMsg 业务实例。
  * @param timestamp_ms 时间戳。
  */
-static void PackRPMsgTelemetryFrame(RPMsgFrameInstance *instance, uint32_t timestamp_ms)
+static void PackRPMsgStateFrame(RPMsgFrameInstance *instance, uint32_t timestamp_ms)
 {
 	FrameTelemetry_t *frame;
 
@@ -58,7 +53,7 @@ static void PackRPMsgTelemetryFrame(RPMsgFrameInstance *instance, uint32_t times
 		return;
 	}
 
-	frame = &instance->tx_frame;
+	frame = &instance->state_frame;
 
 	frame->seq = instance->tx_seq++;
 	frame->timestamp_ms = timestamp_ms;
@@ -105,7 +100,7 @@ static uint8_t DecodeRPMsgCommandFrame(RPMsgFrameInstance *instance,
 		return 0U;
 	}
 
-	instance->rx_frame = frame;
+	instance->command_frame = frame;
 	instance->last_rx_seq = frame.seq;
 
 	return 1U;
@@ -131,10 +126,10 @@ static void DecodeRPMsgFrame(RPMsgInstance *_instance)
 	}
 
 	instance->rx_ok_cnt++;
-	instance->new_command_ready = 1U;
+	instance->has_new_command = 1U;
 
-	if (instance->rpmsg_frame_callback != NULL) {
-		instance->rpmsg_frame_callback(instance);
+	if (instance->command_callback != NULL) {
+		instance->command_callback(instance);
 	}
 }
 
@@ -152,11 +147,6 @@ RPMsgFrameInstance *RPMsgFrameInit(RPMsgFrame_Init_Config_s *config)
 		return NULL;
 	}
 
-	if (idx >= RPMSG_FRAME_MX_REGISTER_CNT) {
-		HAL_DBG_ERR("RPMsg Frame instance pool exhausted.\n");
-		return NULL;
-	}
-
 	instance = (RPMsgFrameInstance *)malloc(sizeof(RPMsgFrameInstance));
 	if (instance == NULL) {
 		HAL_DBG_ERR("RPMsg Frame malloc instance failed.\n");
@@ -164,11 +154,11 @@ RPMsgFrameInstance *RPMsgFrameInit(RPMsgFrame_Init_Config_s *config)
 	}
 	memset(instance, 0, sizeof(RPMsgFrameInstance));
 
-	instance->rpmsg_frame_callback = config->rpmsg_frame_callback;
+	instance->command_callback = config->command_callback;
 	instance->id = config->id;
-	instance->tx_frame.motor_count = config->telemetry_motor_count;
-	if (instance->tx_frame.motor_count > RPMSG_FRAME_MAX_MOTOR_CNT) {
-		instance->tx_frame.motor_count = RPMSG_FRAME_MAX_MOTOR_CNT;
+	instance->state_frame.motor_count = config->state_motor_count;
+	if (instance->state_frame.motor_count > RPMSG_FRAME_MAX_MOTOR_CNT) {
+		instance->state_frame.motor_count = RPMSG_FRAME_MAX_MOTOR_CNT;
 	}
 
 	memset(&rpmsgConfig, 0, sizeof(rpmsgConfig));
@@ -184,64 +174,48 @@ RPMsgFrameInstance *RPMsgFrameInit(RPMsgFrame_Init_Config_s *config)
 		return NULL;
 	}
 
-	rpmsg_frame_instance[idx++] = instance;
-
 	return instance;
 }
 
 /**
- * @brief 设置遥测帧中的电机数量。
+ * @brief 清空当前状态帧内容，但保留电机数量配置。
  * @param instance RPMsg 业务实例。
- * @param motor_count 电机数量，范围 0~RPMSG_FRAME_MAX_MOTOR_CNT。
  */
-void RPMsgFrameSetTelemetryMotorCount(RPMsgFrameInstance *instance, uint8_t motor_count)
+void RPMsgFrameResetStateFrame(RPMsgFrameInstance *instance)
 {
+	uint8_t motorCount;
+
 	if (instance == NULL) {
 		return;
 	}
 
-	if (motor_count > RPMSG_FRAME_MAX_MOTOR_CNT) {
-		motor_count = RPMSG_FRAME_MAX_MOTOR_CNT;
-	}
-
-	instance->tx_frame.motor_count = motor_count;
+	motorCount = instance->state_frame.motor_count;
+	memset(&instance->state_frame, 0, sizeof(instance->state_frame));
+	instance->state_frame.motor_count = motorCount;
 }
 
 /**
- * @brief 设置遥测帧中某个电机状态。
+ * @brief 获取可由 App 层填充的状态帧缓冲区。
  * @param instance RPMsg 业务实例。
- * @param motor_idx 电机索引。
- * @param state 电机状态。
- * @return 设置成功返回 1，失败返回 0。
+ * @return 返回当前状态帧指针，失败返回 NULL。
  */
-uint8_t RPMsgFrameSetTelemetryMotorState(RPMsgFrameInstance *instance,
-										  uint8_t motor_idx,
-										  const MotorState_t *state)
+FrameTelemetry_t *RPMsgFrameGetStateFrame(RPMsgFrameInstance *instance)
 {
-	if ((instance == NULL) || (state == NULL)) {
-		return 0U;
+	if (instance == NULL) {
+		return NULL;
 	}
 
-	if (motor_idx >= RPMSG_FRAME_MAX_MOTOR_CNT) {
-		return 0U;
-	}
-
-	instance->tx_frame.motors[motor_idx] = *state;
-	if (instance->tx_frame.motor_count <= motor_idx) {
-		instance->tx_frame.motor_count = (uint8_t)(motor_idx + 1U);
-	}
-
-	return 1U;
+	return &instance->state_frame;
 }
 
 /**
- * @brief 发送遥测帧。
+ * @brief 发送状态帧。
  * @param instance RPMsg 业务实例。
  * @param timestamp_ms 帧时间戳。
  * @param timeout_ms 发送等待超时时间。
  * @return 发送成功返回 1，失败返回 0。
  */
-uint8_t RPMsgFrameTransmitTelemetry(RPMsgFrameInstance *instance,
+uint8_t RPMsgFrameTransmitStateFrame(RPMsgFrameInstance *instance,
 									 uint32_t timestamp_ms,
 									 uint32_t timeout_ms)
 {
@@ -249,9 +223,9 @@ uint8_t RPMsgFrameTransmitTelemetry(RPMsgFrameInstance *instance,
 		return 0U;
 	}
 
-	PackRPMsgTelemetryFrame(instance, timestamp_ms);
+	PackRPMsgStateFrame(instance, timestamp_ms);
 
-	memcpy(instance->rpmsg_ins->tx_buff, &instance->tx_frame, sizeof(FrameTelemetry_t));
+	memcpy(instance->rpmsg_ins->tx_buff, &instance->state_frame, sizeof(FrameTelemetry_t));
 	RPMsg_SetTxLen(instance->rpmsg_ins, sizeof(FrameTelemetry_t));
 
 	if (RPMsg_Transmit(instance->rpmsg_ins, timeout_ms) == 0U) {
@@ -274,32 +248,32 @@ uint8_t RPMsgFrameHasNewCommand(RPMsgFrameInstance *instance)
 		return 0U;
 	}
 
-	return instance->new_command_ready;
+	return instance->has_new_command;
 }
 
 /**
  * @brief 获取最近一次通过 CRC 校验的命令帧。
  * @param instance RPMsg 业务实例。
  * @param command 输出命令帧缓冲区。
- * @param clear_new_flag 是否在读取后清除 new_command_ready 标记。
+ * @param clear_new_flag 是否在读取后清除 has_new_command 标记。
  * @return 获取成功返回 1，失败返回 0。
  */
-uint8_t RPMsgFrameGetCommand(RPMsgFrameInstance *instance,
-							  FrameCommand_t *command,
-							  uint8_t clear_new_flag)
+uint8_t RPMsgFrameGetCommandFrame(RPMsgFrameInstance *instance,
+								  FrameCommand_t *command,
+								  uint8_t clear_new_flag)
 {
 	if ((instance == NULL) || (command == NULL)) {
 		return 0U;
 	}
 
-	if (instance->new_command_ready == 0U) {
+	if (instance->has_new_command == 0U) {
 		return 0U;
 	}
 
-	*command = instance->rx_frame;
+	*command = instance->command_frame;
 
 	if (clear_new_flag != 0U) {
-		instance->new_command_ready = 0U;
+		instance->has_new_command = 0U;
 	}
 
 	return 1U;
