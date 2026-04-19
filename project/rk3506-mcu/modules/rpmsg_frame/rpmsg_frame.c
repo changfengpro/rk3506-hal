@@ -19,6 +19,13 @@
  */
 static uint16_t RPMsgFrameCalcCrc16(const uint8_t *data, uint32_t len)
 {
+	/* Nibble table for CRC16-CCITT(FALSE), poly=0x1021. */
+	static const uint16_t kCrcNibbleTable[16] = {
+		0x0000U, 0x1021U, 0x2042U, 0x3063U,
+		0x4084U, 0x50A5U, 0x60C6U, 0x70E7U,
+		0x8108U, 0x9129U, 0xA14AU, 0xB16BU,
+		0xC18CU, 0xD1ADU, 0xE1CEU, 0xF1EFU,
+	};
 	uint16_t crc = 0xFFFFU;
 	uint32_t i;
 
@@ -27,16 +34,14 @@ static uint16_t RPMsgFrameCalcCrc16(const uint8_t *data, uint32_t len)
 	}
 
 	for (i = 0U; i < len; i++) {
-		uint8_t bit;
+		uint8_t byte = data[i];
+		uint8_t idx;
 
-		crc ^= (uint16_t)((uint16_t)data[i] << 8);
-		for (bit = 0U; bit < 8U; bit++) {
-			if ((crc & 0x8000U) != 0U) {
-				crc = (uint16_t)((crc << 1) ^ 0x1021U);
-			} else {
-				crc = (uint16_t)(crc << 1);
-			}
-		}
+		idx = (uint8_t)(((uint8_t)(crc >> 12U)) ^ (uint8_t)(byte >> 4U));
+		crc = (uint16_t)((uint16_t)(crc << 4U) ^ kCrcNibbleTable[idx & 0x0FU]);
+
+		idx = (uint8_t)(((uint8_t)(crc >> 12U)) ^ (byte & 0x0FU));
+		crc = (uint16_t)((uint16_t)(crc << 4U) ^ kCrcNibbleTable[idx & 0x0FU]);
 	}
 
 	return crc;

@@ -21,6 +21,9 @@
 #define APP_RPMSG_MOTOR_CNT     1U
 #define APP_RPMSG_TEMP_C        35
 
+#define APP_SYSTICK_IRQ_PRIO    1U
+#define APP_RPMSG_IRQ_PRIO      3U
+
 #define APP_CAN_TX_ID  0x200U
 #define APP_CAN_RX_ID  0x201U
 #define APP_CAN_TX_TIMEOUT_MS 0U
@@ -84,7 +87,7 @@ static void Robot_RPMsgCallback(RPMsgFrameInstance *ins)
     }
 
     Robot_RPMsgBuildStateFrame(ins, &command);
-    (void)RPMsgFrameTransmitStateFrame(ins, HAL_GetTick(), RL_BLOCK);
+    (void)RPMsgFrameTransmitStateFrame(ins, HAL_GetTick(), RL_DONT_BLOCK);
 }
 
 /**
@@ -110,7 +113,7 @@ static uint8_t Robot_RPMsgInit(void)
         return 0U;
     }
 
-    HAL_NVIC_SetPriority(INTMUX_OUT3_IRQn, 1U, 0U);
+    HAL_NVIC_SetPriority(INTMUX_OUT3_IRQn, APP_RPMSG_IRQ_PRIO, 0U);
     HAL_DBG("app rpmsg frame ready\n");
 
     return 1U;
@@ -182,7 +185,7 @@ static uint8_t Robot_CanInit(void)
     CANSetDLC(s_canIns, 8U);
 
     HAL_SYSTICK_Init();
-    HAL_NVIC_SetPriority(SysTick_IRQn, 2U, 0U);
+    HAL_NVIC_SetPriority(SysTick_IRQn, APP_SYSTICK_IRQ_PRIO, 0U);
 
     return 1U;
 }

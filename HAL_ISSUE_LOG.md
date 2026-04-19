@@ -494,3 +494,54 @@
   - `g_can_rx_irq_cnt`
   - `g_appCanRxCnt`
 - 修改固件后再做 J-Link 变量读取时，要以当前 `TestDemo.elf` 重新取地址，不能沿用旧版符号地址。
+
+---
+
+## [2026-04-19] 误回滚后 RPMsg 帧率回落（500Hz -> 250Hz/470Hz）
+
+### 现象
+
+- 原本已稳定的 RPMsg 500Hz 回落，现场表现为约 250Hz（部分场景约 470Hz）。
+- Linux 侧 `rpmsg_fps.log` 显示 `TX/RX` 同步但低于目标值。
+- 同期 MCU 工程可正常编译运行，不是“完全不通”而是吞吐下降。
+
+### 影响
+
+- 并发联调窗口被压缩，RPMsg 与 CAN 同时压测时更容易出现节拍不达标。
+- 上层容易误判为 Linux 侧调度波动或链路随机抖动，排障效率下降。
+
+### 根因
+
+- 根因 1（MCU）：`project/rk3506-mcu/src/robot.c` 中 `Robot_RPMsgCallback()` 被回滚为阻塞发送：
+  - `RPMsgFrameTransmitStateFrame(..., RL_BLOCK)`
+  - 回调在中断链路中执行，阻塞发送会直接拉低可持续帧率。
+- 根因 2（Linux 工具）：板端存在两个可执行文件：
+  - `/root/rpmsg_frame`（旧版本，现场约 470Hz）
+  - `/root/rpmsg_frame_new`（新版本，现场约 500Hz）
+  - 若误启动旧版本，会造成“固件已修复但帧率仍偏低”的假象。
+- 性能补充项：`project/rk3506-mcu/modules/rpmsg_frame/rpmsg_frame.c` 的 CRC 若被回滚为逐位算法，也会进一步拖慢吞吐。
+
+### 修复
+
+- 文件：`project/rk3506-mcu/src/robot.c`
+  - 将回调发送恢复为非阻塞：
+    - `RPMsgFrameTransmitStateFrame(ins, HAL_GetTick(), RL_DONT_BLOCK)`
+- 文件：`project/rk3506-mcu/modules/rpmsg_frame/rpmsg_frame.c`
+  - 保持 CRC16 查表实现（nibble table），避免回滚到逐位循环。
+- Linux 侧运行策略：
+  - 压测时固定使用 `/root/rpmsg_frame_new`，避免误跑旧版 `/root/rpmsg_frame`。
+
+### 验证要点
+
+- MCU 侧：`make -j12` 编译通过，J-Link 重新下载并启动后生效。
+- Linux 侧（`rpmsg_frame_new`）：`rpmsg_fps.log` 连续稳定在 500Hz 附近，例如：
+  - `TX: 502 fps | RX: 501 fps | DROP: 0`
+  - `TX: 500 fps | RX: 500 fps | DROP: 0`
+  - `TX: 501 fps | RX: 501 fps | DROP: 0`
+- Linux 侧（`rpmsg_frame` 旧版）对照：约 470~473 fps。
+
+### 经验总结
+
+- RPMsg 回调/中断路径禁止使用阻塞发送。
+- 现场回归必须同时确认“固件版本 + Linux 用户态可执行版本”。
+- 本次修复按要求未新增调试变量，运行态值通过 J-Link 读取现有符号与寄存器完成核对。
