@@ -11,6 +11,7 @@
 
 #define CAN_MX_REGISTER_CNT 2U
 #define DEVICE_CAN_CNT      2U
+#define CAN_ID_ANY          0xFFFFFFFFU
 
 #define CAN_INTERRUPT_RX    0x01U
 #define CAN_INTERRUPT_TX    0x02U
@@ -23,6 +24,7 @@ struct CANInstance {
     struct CAN_REG *can_handle;
     uint32_t tx_id;
     uint32_t rx_id;
+    uint32_t rx_msg_id;
     uint8_t tx_buff[64];
     uint8_t rx_buff[64];
     uint8_t tx_len;

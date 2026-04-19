@@ -372,7 +372,8 @@ static void CANDispatchRxMessage(struct CAN_REG *pReg, const struct CANFD_MSG *r
         if (can_instance[i]->can_handle != pReg) {
             continue;
         }
-        if (can_instance[i]->rx_id != rx_msg->stdId) {
+        if ((can_instance[i]->rx_id != CAN_ID_ANY) &&
+            (can_instance[i]->rx_id != rx_msg->stdId)) {
             continue;
         }
 
@@ -384,6 +385,7 @@ static void CANDispatchRxMessage(struct CAN_REG *pReg, const struct CANFD_MSG *r
         memset(can_instance[i]->rx_buff, 0, sizeof(can_instance[i]->rx_buff));
         CANSwapBytesPerWord(can_instance[i]->rx_buff, rx_msg->data, copyLen);
         can_instance[i]->rx_len = copyLen;
+        can_instance[i]->rx_msg_id = rx_msg->stdId;
 
         if (can_instance[i]->can_module_callback != NULL) {
             can_instance[i]->can_module_callback(can_instance[i]);
@@ -679,6 +681,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->can_handle = config->can_handle;
     instance->tx_id = config->tx_id;
     instance->rx_id = config->rx_id;
+    instance->rx_msg_id = 0U;
     instance->tx_len = CAN_CLASSIC_DLC_MAX;
     instance->can_module_callback = config->can_module_callback;
     instance->id = config->id;
