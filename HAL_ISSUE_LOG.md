@@ -545,3 +545,83 @@
 - RPMsg 回调/中断路径禁止使用阻塞发送。
 - 现场回归必须同时确认“固件版本 + Linux 用户态可执行版本”。
 - 本次修复按要求未新增调试变量，运行态值通过 J-Link 读取现有符号与寄存器完成核对。
+
+---
+
+## [2026-04-19] Linux 默认 motor_type=NONE 触发 MCU 卡死（PC=0x03A04674）
+
+### 现象
+
+- Linux 侧 `rpmsg_frame` 默认参数下打印：`type=NONE(0)`。
+- 500Hz 压测期间，Linux 侧长期出现 `TX≈478fps, RX=0`。
+- J-Link 停机抓现场时，MCU PC 落在 `0x03A04674`。
+
+### 影响
+
+- 命令下发仍在增长，但 MCU 无法稳定回传遥测。
+- Linux 侧会误判为 RPMsg 链路故障或协议解包失败。
+
+### 根因
+
+- `DJIMotor` 对不支持的 `motor_type` 进入死循环保护分支（`while(1)`）。
+- Linux 工具默认发 `motor_type=NONE(0)`，被 `robot.c` 直接传入 `DJIMotorInit`，触发上述分支。
+- 通过 `addr2line` 对应到 `MotorSenderGrouping` 的 unsupported 类型路径。
+
+### 修复
+
+- 文件：`project/rk3506-mcu/src/robot.c`
+- 在命令处理前增加电机类型白名单（仅 `GM6020/M3508/M2006`）。
+- 对不支持类型直接 `skip`，并做 1s 限频错误日志，避免再次进入 `DJIMotor` 死循环。
+
+### 验证要点
+
+- 默认参数下运行 Linux 工具，配置打印应不再触发 MCU 卡死路径。
+- J-Link 再次停机采样，PC 不再落在 `0x03A04674`。
+- `rpmsg_fps.log` 恢复为双向收发（`RX` 从 0 恢复为非 0）。
+
+### 经验总结
+
+- 上位机默认参数必须与 MCU 驱动支持集合一致，不能依赖下层兜底。
+- 对会触发致命路径的协议字段，业务层应先做白名单过滤。
+
+---
+
+## [2026-04-19] Linux 工具自动 rebind 导致 dmesg 噪声（already exist/no recipient）
+
+### 现象
+
+- 长时间联调中，`dmesg` 周期性出现：
+  - `channel rpmsg-mcu0-test:ffffffff:4003 already exist`
+  - `rpmsg_create_channel failed`
+  - `msg received with no recipient`
+- 该噪声与测试工具的频繁断开重连/驱动 rebind 行为高度相关。
+
+### 影响
+
+- 内核日志被噪声淹没，影响对真实异常的判断。
+- 反复 rebind 会放大联调时序抖动，增加误报概率。
+
+### 根因
+
+- Linux 测试工具在 stalled 恢复路径里执行激进 rebind，导致通道创建/销毁窗口频繁重叠。
+- endpoint 销毁时机过于紧凑，容易出现短暂“消息到达但本地接收端已销毁”的窗口。
+
+### 修复
+
+- 文件：`/home/rmer/Project/Linux/vanxoak_rk3506_board_support/User/rpmsg_frame.c`
+- 文件：`/home/rmer/Project/Linux/vanxoak_rk3506_board_support/User/rpmsg_init.c`
+- 将默认 `motor_type` 改为 `M3508`，减少无效命令导致的异常路径。
+- 将 `ENABLE_KERNEL_REBIND` 默认设为 `0`，stalled 时默认仅 endpoint reconnect。
+- `close_session()` 在 `RPMSG_DESTROY_EPT_IOCTL` 前增加 `30ms` 静默窗口，降低 no-recipient 窗口概率。
+- stalled 日志文案改为按策略输出 `reconnect/rebind`，避免“日志与实际行为不一致”。
+
+### 验证要点
+
+- 板端运行 `rpmsg_frame`/`rpmsg_init`，启动配置打印应显示 `type=M3508(2)`。
+- 使用 dmesg marker 包围测试窗口（30s/12s/15s*2）后，窗口内未再出现上述噪声关键字。
+- 联调收发维持稳定，且 `DROP` 保持为 0。
+
+### 经验总结
+
+- RPMsg 压测工具应默认采用“温和恢复策略”（先 reconnect，再按需人工 rebind）。
+- 销毁 endpoint 前增加短静默可显著降低 `no recipient` 类噪声。

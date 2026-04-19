@@ -5,407 +5,403 @@
 
 #include "djimotor.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "hal_bsp.h"
 
-#define DJI_TX_GROUP_1FF 0x1FFU
-#define DJI_TX_GROUP_200 0x200U
-#define DJI_TX_GROUP_2FF 0x2FFU
+#define RPM_2_ANGLE_PER_SEC 6.0f
 
-typedef struct {
-	uint8_t used;
-	uint8_t motor_id;
-	uint8_t motor_type;
-	uint8_t control_mode;
-	uint8_t tx_group_slot;
-	uint32_t rx_id;
-	uint32_t tx_group_id;
+extern const struct HAL_CANFD_DEV g_can0Dev;
+extern const struct HAL_CANFD_DEV g_can1Dev;
 
-	CANInstance *rx_can;
+static uint8_t idx = 0;
+static DJIMotorInstance *dji_motor_instance[DJI_MOTOR_CNT] = { NULL };
 
-	int32_t target_position_q16;
-	int32_t target_velocity_q16;
-	int16_t target_torque_q8;
-
-	int32_t feedback_position_q16;
-	int32_t feedback_velocity_q16;
-	int16_t feedback_torque_q8;
-	int16_t temperature_c;
-	uint32_t last_rx_tick;
-	uint16_t status_flags;
-} DJIMotorInstance;
-
-typedef struct {
-	uint32_t tx_id;
-	uint8_t tx_buff[8];
-	uint8_t active;
-} DJIMotorSender;
-
-static DJIMotorInstance dji_motor_instance[DJI_MOTOR_CNT];
-static DJIMotorSender sender_assignment[3] = {
-	{ DJI_TX_GROUP_1FF, { 0 }, 0U },
-	{ DJI_TX_GROUP_200, { 0 }, 0U },
-	{ DJI_TX_GROUP_2FF, { 0 }, 0U },
+static CANInstance sender_assignment[6] = {
+	[0] = { 0 },
+	[1] = { 0 },
+	[2] = { 0 },
+	[3] = { 0 },
+	[4] = { 0 },
+	[5] = { 0 },
 };
 
-static struct CAN_REG *dji_motor_can_handle;
-static uint32_t dji_motor_tx_timeout_ms = DJI_MOTOR_DEFAULT_TX_TIMEOUT_MS;
-static uint32_t dji_motor_feedback_timeout_ms = DJI_MOTOR_DEFAULT_FB_TIMEOUT_MS;
-static uint8_t dji_motor_init_flag;
+static uint8_t sender_enable_flag[9] = { 0 };
+static uint8_t sender_assignment_inited = 0;
 
-static int16_t DJIMotorClampInt16(int32_t value, int16_t min, int16_t max)
+static float DJIMotorGetDeltaT(uint32_t *last_tick)
 {
-	if (value < (int32_t)min) {
-		return min;
-	}
-	if (value > (int32_t)max) {
-		return max;
+	uint32_t now;
+	uint32_t delta_ms;
+
+	if (last_tick == NULL) {
+		return 0.001f;
 	}
 
-	return (int16_t)value;
+	now = HAL_GetTick();
+	if (*last_tick == 0U) {
+		*last_tick = now;
+		return 0.001f;
+	}
+
+	delta_ms = now - *last_tick;
+	*last_tick = now;
+
+	if (delta_ms == 0U) {
+		return 0.001f;
+	}
+
+	return (float)delta_ms * 0.001f;
 }
 
-static uint8_t DJIMotorGetTxGroupIndex(uint32_t txGroupId)
+static void DJIMotorInitSenderAssignment(void)
 {
-	if (txGroupId == DJI_TX_GROUP_1FF) {
-		return 0U;
-	}
-	if (txGroupId == DJI_TX_GROUP_200) {
-		return 1U;
-	}
-	if (txGroupId == DJI_TX_GROUP_2FF) {
-		return 2U;
+	if (sender_assignment_inited != 0U) {
+		return;
 	}
 
-	return 0xFFU;
+	sender_assignment[0].can_handle = g_can0Dev.pReg;
+	sender_assignment[0].tx_id = 0x1ffU;
+	sender_assignment[0].tx_len = 8U;
+
+	sender_assignment[1].can_handle = g_can0Dev.pReg;
+	sender_assignment[1].tx_id = 0x200U;
+	sender_assignment[1].tx_len = 8U;
+
+	sender_assignment[2].can_handle = g_can0Dev.pReg;
+	sender_assignment[2].tx_id = 0x2ffU;
+	sender_assignment[2].tx_len = 8U;
+
+	sender_assignment[3].can_handle = g_can1Dev.pReg;
+	sender_assignment[3].tx_id = 0x1ffU;
+	sender_assignment[3].tx_len = 8U;
+
+	sender_assignment[4].can_handle = g_can1Dev.pReg;
+	sender_assignment[4].tx_id = 0x200U;
+	sender_assignment[4].tx_len = 8U;
+
+	sender_assignment[5].can_handle = g_can1Dev.pReg;
+	sender_assignment[5].tx_id = 0x2ffU;
+	sender_assignment[5].tx_len = 8U;
+
+	sender_assignment_inited = 1U;
 }
 
-static uint8_t MotorSenderGrouping(uint8_t motorType,
-						   uint8_t motorId,
-						   uint32_t *rxId,
-						   uint32_t *txGroupId,
-						   uint8_t *txGroupSlot)
+static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *config)
 {
-	if ((rxId == NULL) || (txGroupId == NULL) || (txGroupSlot == NULL)) {
-		return 0U;
-	}
-	if ((motorId == 0U) || (motorId > 8U)) {
-		return 0U;
+	uint8_t motor_id;
+	uint8_t motor_send_num;
+	uint8_t motor_grouping;
+	uint8_t grouping_offset;
+
+	if ((motor == NULL) || (config == NULL) || (config->tx_id == 0U)) {
+		return;
 	}
 
-	switch (motorType) {
+	motor_id = (uint8_t)(config->tx_id - 1U);
+	if (config->can_handle == g_can0Dev.pReg) {
+		grouping_offset = 0U;
+	} else if (config->can_handle == g_can1Dev.pReg) {
+		grouping_offset = 3U;
+	} else {
+		grouping_offset = 6U;
+	}
+
+	switch (motor->motor_type) {
 	case M2006:
 	case M3508:
-		if (motorId <= 4U) {
-			*txGroupId = DJI_TX_GROUP_200;
-			*txGroupSlot = (uint8_t)(motorId - 1U);
+		if (motor_id < 4U) {
+			motor_send_num = motor_id;
+			motor_grouping = (uint8_t)(grouping_offset + 1U);
 		} else {
-			*txGroupId = DJI_TX_GROUP_1FF;
-			*txGroupSlot = (uint8_t)(motorId - 5U);
+			motor_send_num = (uint8_t)(motor_id - 4U);
+			motor_grouping = (uint8_t)(grouping_offset + 0U);
 		}
-		*rxId = (uint32_t)(DJI_TX_GROUP_200 + motorId);
-		return 1U;
+
+		config->rx_id = (uint32_t)(0x200U + motor_id + 1U);
+		sender_enable_flag[motor_grouping] = 1U;
+		motor->message_num = motor_send_num;
+		motor->sender_group = motor_grouping;
+
+		for (size_t i = 0; i < idx; ++i) {
+			if ((dji_motor_instance[i] != NULL) &&
+				(dji_motor_instance[i]->motor_can_instance != NULL) &&
+				(dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle) &&
+				(dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)) {
+				HAL_DBG_ERR("[dji_motor] ID crash, rx_id=%lu\n", (unsigned long)config->rx_id);
+				while (1) {
+				}
+			}
+		}
+		break;
 
 	case GM6020:
-		if (motorId <= 4U) {
-			*txGroupId = DJI_TX_GROUP_1FF;
-			*txGroupSlot = (uint8_t)(motorId - 1U);
+		if (motor_id < 4U) {
+			motor_send_num = motor_id;
+			motor_grouping = (uint8_t)(grouping_offset + 0U);
 		} else {
-			*txGroupId = DJI_TX_GROUP_2FF;
-			*txGroupSlot = (uint8_t)(motorId - 5U);
+			motor_send_num = (uint8_t)(motor_id - 4U);
+			motor_grouping = (uint8_t)(grouping_offset + 2U);
 		}
-		*rxId = (uint32_t)(0x204U + motorId);
-		return 1U;
+
+		config->rx_id = (uint32_t)(0x204U + motor_id + 1U);
+		sender_enable_flag[motor_grouping] = 1U;
+		motor->message_num = motor_send_num;
+		motor->sender_group = motor_grouping;
+
+		for (size_t i = 0; i < idx; ++i) {
+			if ((dji_motor_instance[i] != NULL) &&
+				(dji_motor_instance[i]->motor_can_instance != NULL) &&
+				(dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle) &&
+				(dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)) {
+				HAL_DBG_ERR("[dji_motor] ID crash, rx_id=%lu\n", (unsigned long)config->rx_id);
+				while (1) {
+				}
+			}
+		}
+		break;
 
 	default:
-		return 0U;
-	}
-}
-
-static void DecodeDJIMotor(CANInstance *ins)
-{
-	DJIMotorInstance *slot;
-	uint16_t ecd;
-	int16_t speedRpm;
-	int16_t currentRaw;
-
-	if ((ins == NULL) || (ins->id == NULL)) {
-		return;
-	}
-	if (ins->rx_len < 7U) {
-		return;
-	}
-
-	slot = (DJIMotorInstance *)ins->id;
-	ecd = (uint16_t)(((uint16_t)ins->rx_buff[0] << 8) | ins->rx_buff[1]);
-	speedRpm = (int16_t)(((uint16_t)ins->rx_buff[2] << 8) | ins->rx_buff[3]);
-	currentRaw = (int16_t)(((uint16_t)ins->rx_buff[4] << 8) | ins->rx_buff[5]);
-
-	slot->feedback_position_q16 = ((int32_t)ecd * 360 * (int32_t)RPMSG_FRAME_Q16_SCALE) / 8192;
-	slot->feedback_velocity_q16 = (int32_t)speedRpm * 6 * (int32_t)RPMSG_FRAME_Q16_SCALE;
-	slot->feedback_torque_q8 = currentRaw;
-	slot->temperature_c = (int16_t)ins->rx_buff[6];
-	slot->last_rx_tick = HAL_GetTick();
-	slot->status_flags |= DJI_MOTOR_STATUS_RX_VALID;
-	slot->status_flags &= (uint16_t)(~DJI_MOTOR_STATUS_TIMEOUT);
-}
-
-static DJIMotorInstance *DJIMotorFindSlot(uint8_t motorId, uint8_t motorType)
-{
-	uint8_t i;
-
-	for (i = 0U; i < DJI_MOTOR_CNT; i++) {
-		if ((dji_motor_instance[i].used != 0U) &&
-			(dji_motor_instance[i].motor_id == motorId) &&
-			(dji_motor_instance[i].motor_type == motorType)) {
-			return &dji_motor_instance[i];
+		HAL_DBG_ERR("[dji_motor] unsupported motor type=%d\n", (int)motor->motor_type);
+		while (1) {
 		}
 	}
-
-	return NULL;
 }
 
-static DJIMotorInstance *DJIMotorAllocInstance(void)
+static void DecodeDJIMotor(CANInstance *instance)
 {
-	uint8_t i;
+	uint8_t *rxbuff;
+	DJIMotorInstance *motor;
+	DJI_Motor_Measure_s *measure;
 
-	for (i = 0U; i < DJI_MOTOR_CNT; i++) {
-		if (dji_motor_instance[i].used == 0U) {
-			memset(&dji_motor_instance[i], 0, sizeof(dji_motor_instance[i]));
-			dji_motor_instance[i].used = 1U;
-			return &dji_motor_instance[i];
-		}
-	}
-
-	return NULL;
-}
-
-static DJIMotorInstance *DJIMotorRegister(uint8_t motorId, uint8_t motorType)
-{
-	DJIMotorInstance *slot;
-	CAN_Init_Config_s canCfg;
-	uint32_t rxId;
-	uint32_t txGroupId;
-	uint8_t txGroupSlot;
-
-	slot = DJIMotorFindSlot(motorId, motorType);
-	if (slot != NULL) {
-		return slot;
-	}
-
-	if (MotorSenderGrouping(motorType, motorId, &rxId, &txGroupId, &txGroupSlot) == 0U) {
-		return NULL;
-	}
-
-	slot = DJIMotorAllocInstance();
-	if (slot == NULL) {
-		return NULL;
-	}
-
-	slot->motor_id = motorId;
-	slot->motor_type = motorType;
-	slot->rx_id = rxId;
-	slot->tx_group_id = txGroupId;
-	slot->tx_group_slot = txGroupSlot;
-
-	memset(&canCfg, 0, sizeof(canCfg));
-	canCfg.can_handle = dji_motor_can_handle;
-	canCfg.tx_id = rxId;
-	canCfg.rx_id = rxId;
-	canCfg.can_module_callback = DecodeDJIMotor;
-	canCfg.id = slot;
-
-	slot->rx_can = CANRegister(&canCfg);
-	if (slot->rx_can == NULL) {
-		slot->used = 0U;
-		return NULL;
-	}
-
-	slot->status_flags |= DJI_MOTOR_STATUS_REGISTERED;
-	return slot;
-}
-
-static int16_t DJIMotorResolveOutput(const DJIMotorInstance *slot, uint16_t *statusFlags)
-{
-	int32_t raw = 0;
-
-	if ((slot == NULL) || (statusFlags == NULL)) {
-		return 0;
-	}
-
-	if (slot->control_mode == MOTOR_CONTROL_MODE_TORQUE) {
-		raw = slot->target_torque_q8;
-		*statusFlags = (uint16_t)(*statusFlags & (~DJI_MOTOR_STATUS_MODE_UNSUPPORTED));
-	} else {
-		raw = 0;
-		*statusFlags = (uint16_t)(*statusFlags | DJI_MOTOR_STATUS_MODE_UNSUPPORTED);
-	}
-
-	return DJIMotorClampInt16(raw, -DJI_MOTOR_CMD_LIMIT, DJI_MOTOR_CMD_LIMIT);
-}
-
-uint8_t DJIMotorInit(const DJIMotor_Init_Config_s *config)
-{
-	memset(dji_motor_instance, 0, sizeof(dji_motor_instance));
-
-	if ((config != NULL) && (config->can_handle != NULL)) {
-		dji_motor_can_handle = config->can_handle;
-	} else {
-		dji_motor_can_handle = g_can0Dev.pReg;
-	}
-
-	if (dji_motor_can_handle == NULL) {
-		return 0U;
-	}
-
-	if ((config != NULL) && (config->tx_timeout_ms > 0U)) {
-		dji_motor_tx_timeout_ms = config->tx_timeout_ms;
-	} else {
-		dji_motor_tx_timeout_ms = DJI_MOTOR_DEFAULT_TX_TIMEOUT_MS;
-	}
-
-	if ((config != NULL) && (config->feedback_timeout_ms > 0U)) {
-		dji_motor_feedback_timeout_ms = config->feedback_timeout_ms;
-	} else {
-		dji_motor_feedback_timeout_ms = DJI_MOTOR_DEFAULT_FB_TIMEOUT_MS;
-	}
-	dji_motor_init_flag = 1U;
-
-	return 1U;
-}
-
-void DJIMotorApplyCommandFrame(const FrameCommand_t *command)
-{
-	uint8_t motorCount;
-	uint8_t i;
-
-	if ((dji_motor_init_flag == 0U) || (command == NULL)) {
+	if ((instance == NULL) || (instance->id == NULL) || (instance->rx_len < 7U)) {
 		return;
 	}
 
-	motorCount = command->motor_count;
-	if (motorCount > RPMSG_FRAME_MAX_MOTOR_CNT) {
-		motorCount = RPMSG_FRAME_MAX_MOTOR_CNT;
+	rxbuff = instance->rx_buff;
+	motor = (DJIMotorInstance *)instance->id;
+	measure = &motor->measure;
+
+	motor->dt = DJIMotorGetDeltaT(&motor->feed_cnt);
+
+	measure->last_ecd = measure->ecd;
+	measure->ecd = (uint16_t)(((uint16_t)rxbuff[0] << 8) | rxbuff[1]);
+	measure->angle_single_round = ECD_ANGLE_COEF_DJI * (float)measure->ecd;
+	measure->speed_rpm = (float)((int16_t)(((uint16_t)rxbuff[2] << 8) | rxbuff[3]));
+	measure->speed_aps = (1.0f - SPEED_SMOOTH_COEF) * measure->speed_aps +
+		RPM_2_ANGLE_PER_SEC * SPEED_SMOOTH_COEF * measure->speed_rpm;
+	measure->real_current = (int16_t)((1.0f - CURRENT_SMOOTH_COEF) * (float)measure->real_current +
+		CURRENT_SMOOTH_COEF * (float)((int16_t)(((uint16_t)rxbuff[4] << 8) | rxbuff[5])));
+	measure->temperature = rxbuff[6];
+
+	if ((int32_t)measure->ecd - (int32_t)measure->last_ecd > 4096) {
+		measure->total_round--;
+	} else if ((int32_t)measure->ecd - (int32_t)measure->last_ecd < -4096) {
+		measure->total_round++;
+	}
+	measure->total_angle = (float)measure->total_round * 360.0f + measure->angle_single_round;
+}
+
+DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
+{
+	DJIMotorInstance *instance;
+
+	if ((config == NULL) || (idx >= DJI_MOTOR_CNT)) {
+		return NULL;
 	}
 
-	for (i = 0U; i < motorCount; i++) {
-		const MotorCmd_t *cmd = &command->motors[i];
-		DJIMotorInstance *slot;
+	DJIMotorInitSenderAssignment();
 
-		slot = DJIMotorRegister(cmd->motor_id, cmd->motor_type);
-		if (slot == NULL) {
-			continue;
-		}
-
-		slot->control_mode = cmd->control_mode;
-		slot->target_position_q16 = cmd->target_position_q16;
-		slot->target_velocity_q16 = cmd->target_velocity_q16;
-		slot->target_torque_q8 = cmd->target_torque_q8;
+	instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
+	if (instance == NULL) {
+		return NULL;
 	}
+	memset(instance, 0, sizeof(DJIMotorInstance));
+
+	instance->motor_type = config->motor_type;
+	instance->motor_settings = config->controller_setting_init_config;
+	instance->motor_close_type = config->motor_close_type;
+
+	PIDInit(&instance->motor_controller.current_PID, &config->controller_param_init_config.current_PID);
+	PIDInit(&instance->motor_controller.speed_PID, &config->controller_param_init_config.speed_PID);
+	PIDInit(&instance->motor_controller.angle_PID, &config->controller_param_init_config.angle_PID);
+	instance->motor_controller.other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
+	instance->motor_controller.other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
+	instance->motor_controller.current_feedforward_ptr = config->controller_param_init_config.current_feedforward_ptr;
+	instance->motor_controller.speed_feedforward_ptr = config->controller_param_init_config.speed_feedforward_ptr;
+
+	MotorSenderGrouping(instance, &config->can_init_config);
+
+	config->can_init_config.can_module_callback = DecodeDJIMotor;
+	config->can_init_config.id = instance;
+	instance->motor_can_instance = CANRegister(&config->can_init_config);
+	if (instance->motor_can_instance == NULL) {
+		free(instance);
+		return NULL;
+	}
+
+	DJIMotorEnable(instance);
+	dji_motor_instance[idx++] = instance;
+	return instance;
+}
+
+void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	if (loop == ANGLE_LOOP) {
+		motor->motor_settings.angle_feedback_source = type;
+	} else if (loop == SPEED_LOOP) {
+		motor->motor_settings.speed_feedback_source = type;
+	} else {
+		HAL_DBG_ERR("[dji_motor] loop type error\n");
+	}
+}
+
+void DJIMotorStop(DJIMotorInstance *motor)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	motor->stop_flag = MOTOR_STOP;
+}
+
+void DJIMotorEnable(DJIMotorInstance *motor)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	motor->stop_flag = MOTOR_ENALBED;
+}
+
+void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	motor->motor_settings.outer_loop_type = outer_loop;
+}
+
+void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	motor->motor_controller.pid_ref = ref;
+}
+
+void DJIMotorSetOutputLimit(DJIMotorInstance *motor, float output_limit)
+{
+	if (motor == NULL) {
+		return;
+	}
+
+	motor->motor_controller.pid_output_limit = output_limit;
 }
 
 void DJIMotorControl(void)
 {
-	uint8_t i;
+	uint8_t group;
+	uint8_t num;
+	int16_t set;
+	DJIMotorInstance *motor;
+	Motor_Control_Setting_s *motor_setting;
+	Motor_Controller_s *motor_controller;
+	DJI_Motor_Measure_s *measure;
+	float pid_measure;
+	float pid_ref;
 
-	if (dji_motor_init_flag == 0U) {
-		return;
-	}
-
-	for (i = 0U; i < 3U; i++) {
-		memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
-		sender_assignment[i].active = 0U;
-	}
-
-	for (i = 0U; i < DJI_MOTOR_CNT; i++) {
-		uint8_t groupIdx;
-		DJIMotorInstance *slot = &dji_motor_instance[i];
-		int16_t out;
-
-		if (slot->used == 0U) {
+	for (size_t i = 0; i < idx; ++i) {
+		motor = dji_motor_instance[i];
+		if (motor == NULL) {
 			continue;
 		}
 
-		out = DJIMotorResolveOutput(slot, &slot->status_flags);
-		groupIdx = DJIMotorGetTxGroupIndex(slot->tx_group_id);
-		if (groupIdx >= 3U) {
-			continue;
+		motor_setting = &motor->motor_settings;
+		motor_controller = &motor->motor_controller;
+		measure = &motor->measure;
+		pid_ref = motor_controller->pid_ref;
+
+		if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE) {
+			pid_ref *= -1.0f;
 		}
 
-		sender_assignment[groupIdx].active = 1U;
-		sender_assignment[groupIdx].tx_buff[2U * slot->tx_group_slot] = (uint8_t)((uint16_t)out >> 8);
-		sender_assignment[groupIdx].tx_buff[2U * slot->tx_group_slot + 1U] = (uint8_t)((uint16_t)out & 0xFFU);
-	}
-
-	for (i = 0U; i < 3U; i++) {
-		CANInstance txIns;
-		uint8_t j;
-
-		if (sender_assignment[i].active == 0U) {
-			continue;
-		}
-
-		memset(&txIns, 0, sizeof(txIns));
-		txIns.can_handle = dji_motor_can_handle;
-		txIns.tx_id = sender_assignment[i].tx_id;
-		txIns.tx_len = 8U;
-		memcpy(txIns.tx_buff, sender_assignment[i].tx_buff, sizeof(sender_assignment[i].tx_buff));
-
-		if (CANTransmit(&txIns, dji_motor_tx_timeout_ms) == 0U) {
-			for (j = 0U; j < DJI_MOTOR_CNT; j++) {
-				if ((dji_motor_instance[j].used != 0U) && (dji_motor_instance[j].tx_group_id == sender_assignment[i].tx_id)) {
-					dji_motor_instance[j].status_flags |= DJI_MOTOR_STATUS_TX_FAIL;
+		if ((motor_setting->close_loop_type & ANGLE_LOOP) &&
+			(motor_setting->outer_loop_type == ANGLE_LOOP)) {
+			if ((motor_setting->angle_feedback_source == OTHER_FEED) &&
+				(motor_controller->other_angle_feedback_ptr != NULL)) {
+				pid_measure = *motor_controller->other_angle_feedback_ptr;
+			} else {
+				if (motor->motor_close_type == SINGLE_ANGLE) {
+					pid_measure = measure->angle_single_round;
+				} else {
+					pid_measure = measure->total_angle;
 				}
 			}
-		} else {
-			for (j = 0U; j < DJI_MOTOR_CNT; j++) {
-				if ((dji_motor_instance[j].used != 0U) && (dji_motor_instance[j].tx_group_id == sender_assignment[i].tx_id)) {
-					dji_motor_instance[j].status_flags &= (uint16_t)(~DJI_MOTOR_STATUS_TX_FAIL);
-				}
-			}
+
+			pid_ref = PIDCalculate(&motor_controller->angle_PID, pid_measure, pid_ref);
 		}
-	}
-}
 
-uint8_t DJIMotorFillTelemetry(FrameTelemetry_t *stateFrame)
-{
-	uint8_t i;
-	uint8_t count = 0U;
+		if ((motor_setting->close_loop_type & SPEED_LOOP) &&
+			(motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))) {
+			if ((motor_setting->feedforward_flag & SPEED_FEEDFORWARD) &&
+				(motor_controller->speed_feedforward_ptr != NULL)) {
+				pid_ref += *motor_controller->speed_feedforward_ptr;
+			}
 
-	if ((dji_motor_init_flag == 0U) || (stateFrame == NULL)) {
-		return 0U;
-	}
+			if ((motor_setting->speed_feedback_source == OTHER_FEED) &&
+				(motor_controller->other_speed_feedback_ptr != NULL)) {
+				pid_measure = *motor_controller->other_speed_feedback_ptr;
+			} else {
+				pid_measure = measure->speed_aps;
+			}
 
-	for (i = 0U; i < DJI_MOTOR_CNT; i++) {
-		DJIMotorInstance *slot = &dji_motor_instance[i];
-		MotorState_t *dst;
-		uint16_t flags;
+			pid_ref = PIDCalculate(&motor_controller->speed_PID, pid_measure, pid_ref);
+		}
 
-		if (slot->used == 0U) {
+		if ((motor_setting->feedforward_flag & CURRENT_FEEDFORWARD) &&
+			(motor_controller->current_feedforward_ptr != NULL)) {
+			pid_ref += *motor_controller->current_feedforward_ptr;
+		}
+		if (motor_setting->close_loop_type & CURRENT_LOOP) {
+			pid_ref = PIDCalculate(&motor_controller->current_PID, (float)measure->real_current, pid_ref);
+		}
+
+		if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE) {
+			pid_ref *= -1.0f;
+		}
+
+		motor_controller->pid_output = pid_ref;
+		set = (int16_t)pid_ref;
+
+		if (motor_setting->power_limit_flag == POWER_LIMIT_ON) {
+			set = (int16_t)motor_controller->pid_output_limit;
+		}
+
+		group = motor->sender_group;
+		num = motor->message_num;
+		if (group >= 6U || num >= 4U) {
 			continue;
 		}
-		if (count >= RPMSG_FRAME_MAX_MOTOR_CNT) {
-			break;
+
+		sender_assignment[group].tx_buff[2U * num] = (uint8_t)(((uint16_t)set) >> 8);
+		sender_assignment[group].tx_buff[2U * num + 1U] = (uint8_t)(((uint16_t)set) & 0x00ffU);
+
+		if (motor->stop_flag == MOTOR_STOP) {
+			memset(sender_assignment[group].tx_buff + 2U * num, 0, 2U);
 		}
-
-		dst = &stateFrame->motors[count++];
-		flags = slot->status_flags;
-
-		if ((HAL_GetTick() - slot->last_rx_tick) > dji_motor_feedback_timeout_ms) {
-			flags |= DJI_MOTOR_STATUS_TIMEOUT;
-		} else {
-			flags &= (uint16_t)(~DJI_MOTOR_STATUS_TIMEOUT);
-		}
-
-		dst->motor_id = slot->motor_id;
-		dst->position_q16 = slot->feedback_position_q16;
-		dst->velocity_q16 = slot->feedback_velocity_q16;
-		dst->torque_q8 = slot->feedback_torque_q8;
-		dst->temperature_c = slot->temperature_c;
-		dst->status_flags = flags;
 	}
 
-	stateFrame->motor_count = count;
-	return count;
+	for (size_t i = 0; i < 6U; ++i) {
+		if (sender_enable_flag[i] != 0U) {
+			(void)CANTransmit(&sender_assignment[i], 1U);
+		}
+	}
 }

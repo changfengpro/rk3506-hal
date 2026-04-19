@@ -1,65 +1,63 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * Copyright (c) 2022-2026 changfengpro
- *
- * DJI motor module.
- *
- * Expected information flow:
- * 1) BSP CAN receives feedback and dispatches callbacks to this module.
- * 2) This module maintains target/feedback states and sends grouped DJI frames.
- * 3) Robot layer only feeds command frames and fetches telemetry from module APIs.
  */
 
 #ifndef DJI_MOTOR_H
 #define DJI_MOTOR_H
 
+#include <stdint.h>
+
 #include "bsp_can.h"
-#include "rpmsg_frame.h"
+#include "controller.h"
+#include "../motor_def.h"
 
-#define DJI_MOTOR_CNT                  4U
-#define DJI_MOTOR_CMD_LIMIT            16384
-#define DJI_MOTOR_DEFAULT_TX_TIMEOUT_MS 1U
-#define DJI_MOTOR_DEFAULT_FB_TIMEOUT_MS 100U
+#define DJI_MOTOR_CNT 12
 
-#define DJI_MOTOR_STATUS_REGISTERED       (1U << 0)
-#define DJI_MOTOR_STATUS_RX_VALID         (1U << 1)
-#define DJI_MOTOR_STATUS_TIMEOUT          (1U << 2)
-#define DJI_MOTOR_STATUS_MODE_UNSUPPORTED (1U << 3)
-#define DJI_MOTOR_STATUS_TX_FAIL          (1U << 4)
+/* 滤波系数设置为1的时候即关闭滤波 */
+#define SPEED_SMOOTH_COEF   0.85f
+#define CURRENT_SMOOTH_COEF 0.9f
+#define ECD_ANGLE_COEF_DJI  0.043945f
+
+/* DJI电机CAN反馈信息 */
+typedef struct {
+	uint16_t last_ecd;
+	uint16_t ecd;
+	float angle_single_round;
+	float speed_aps;
+	int16_t real_current;
+	uint8_t temperature;
+	float speed_rpm;
+
+	float total_angle;
+	int32_t total_round;
+} DJI_Motor_Measure_s;
 
 typedef struct {
-	struct CAN_REG *can_handle;
-	uint32_t tx_timeout_ms;
-	uint32_t feedback_timeout_ms;
-} DJIMotor_Init_Config_s;
+	DJI_Motor_Measure_s measure;
+	Motor_Control_Setting_s motor_settings;
+	Motor_Controller_s motor_controller;
 
-/**
- * @brief Initialize DJI motor module service.
- *
- * @param config Initialization parameters. If NULL, defaults are used.
- * @return 1 on success, 0 on failure.
- */
-uint8_t DJIMotorInit(const DJIMotor_Init_Config_s *config);
+	CANInstance *motor_can_instance;
+	uint8_t sender_group;
+	uint8_t message_num;
 
-/**
- * @brief Feed the latest RPMsg command frame into DJI module.
- *
- * The module stores target values per motor and creates RX registrations
- * on demand according to motor ID/type.
- */
-void DJIMotorApplyCommandFrame(const FrameCommand_t *command);
+	Motor_Type_e motor_type;
+	Motor_Working_Type_e stop_flag;
 
-/**
- * @brief Run one control step: pack and send grouped DJI CAN command frames.
- */
+	void *daemon;
+	Motor_Close_Type motor_close_type;
+	uint32_t feed_cnt;
+	float dt;
+} DJIMotorInstance;
+
+DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
+void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
+void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 void DJIMotorControl(void);
-
-/**
- * @brief Fill telemetry motors[] from module feedback cache.
- *
- * @param stateFrame Output telemetry frame buffer.
- * @return Number of motors written into stateFrame->motors.
- */
-uint8_t DJIMotorFillTelemetry(FrameTelemetry_t *stateFrame);
+void DJIMotorStop(DJIMotorInstance *motor);
+void DJIMotorEnable(DJIMotorInstance *motor);
+void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
+void DJIMotorSetOutputLimit(DJIMotorInstance *motor, float output_limit);
 
 #endif /* DJI_MOTOR_H */

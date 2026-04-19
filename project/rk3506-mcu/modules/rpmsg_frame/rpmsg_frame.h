@@ -43,9 +43,9 @@ typedef enum {
  */
 typedef struct __attribute__((packed)) {
 	uint8_t motor_id;        /* 电机 ID。 */
-	int32_t position_q16;    /* 位置，Q16 定点。 */
-	int32_t velocity_q16;    /* 速度，Q16 定点。 */
-	int16_t torque_q8;       /* 力矩，Q8 定点。 */
+	int32_t position_q16;    /* 位置 Q16，真实值=raw/65536。 */
+	int32_t velocity_q16;    /* 速度 Q16，真实值=raw/65536。 */
+	int16_t torque_q8;       /* 力矩 Q8，真实值=raw/256。 */
 	int16_t temperature_c;   /* 温度，单位摄氏度。 */
 	uint16_t status_flags;   /* 状态标志位。 */
 } MotorState_t;
@@ -69,9 +69,9 @@ typedef struct __attribute__((packed)) {
 	uint8_t motor_id;                /* 电机 ID。 */
 	uint8_t motor_type;              /* 协议字段，取值见 Motor_Type_e，业务侧建议转成 enum 使用。 */
 	uint8_t control_mode;            /* 协议字段，取值见 Motor_Control_Mode_e，业务侧建议转成 enum 使用。 */
-	int32_t target_position_q16;     /* 目标位置，Q16 定点。 */
-	int32_t target_velocity_q16;     /* 目标速度，Q16 定点。 */
-	int16_t target_torque_q8;        /* 目标力矩，Q8 定点。 */
+	int32_t target_position_q16;     /* 位置目标 Q16，真实值=raw/65536。 */
+	int32_t target_velocity_q16;     /* 速度目标 Q16，真实值=raw/65536。 */
+	int16_t target_torque_q8;        /* 力矩目标 Q8，真实值=raw/256。 */
 } MotorCmd_t;
 
 /**

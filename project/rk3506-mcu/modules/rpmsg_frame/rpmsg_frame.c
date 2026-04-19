@@ -11,6 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define RPMSG_FRAME_TELEMETRY_SIZE_EXPECTED 309U
+#define RPMSG_FRAME_COMMAND_SIZE_EXPECTED   269U
+
+typedef char RPMsgFrameTelemetrySizeCheck[
+	(sizeof(FrameTelemetry_t) == RPMSG_FRAME_TELEMETRY_SIZE_EXPECTED) ? 1 : -1];
+typedef char RPMsgFrameCommandSizeCheck[
+	(sizeof(FrameCommand_t) == RPMSG_FRAME_COMMAND_SIZE_EXPECTED) ? 1 : -1];
+
+static uint32_t g_rpmsgFrameLastDropLogTick;
+
 /**
  * @brief 计算 CRC16-CCITT(FALSE) 校验值。
  * @param data 输入数据。
@@ -85,18 +95,41 @@ static uint8_t DecodeRPMsgCommandFrame(RPMsgFrameInstance *instance,
 	FrameCommand_t frame;
 	uint16_t crcExpect;
 	uint16_t crcCalc;
+	uint32_t now;
 
 	if ((instance == NULL) || (payload == NULL)) {
 		return 0U;
 	}
 
-	if (payload_len != sizeof(FrameCommand_t)) {
+	if (payload_len < sizeof(FrameCommand_t)) {
+		now = HAL_GetTick();
+		if ((now - g_rpmsgFrameLastDropLogTick) >= 200U) {
+			HAL_DBG_ERR("RPMsg cmd len too short, rx=%d exp=%d\n",
+					(int)payload_len,
+					(int)sizeof(FrameCommand_t));
+			g_rpmsgFrameLastDropLogTick = now;
+		}
 		return 0U;
+	}
+
+	if (payload_len != sizeof(FrameCommand_t)) {
+		now = HAL_GetTick();
+		if ((now - g_rpmsgFrameLastDropLogTick) >= 200U) {
+			HAL_DBG_ERR("RPMsg cmd len padded, rx=%d exp=%d\n",
+					(int)payload_len,
+					(int)sizeof(FrameCommand_t));
+			g_rpmsgFrameLastDropLogTick = now;
+		}
 	}
 
 	memcpy(&frame, payload, sizeof(frame));
 
 	if (frame.motor_count > RPMSG_FRAME_MAX_MOTOR_CNT) {
+		now = HAL_GetTick();
+		if ((now - g_rpmsgFrameLastDropLogTick) >= 200U) {
+			HAL_DBG_ERR("RPMsg cmd motor_count invalid=%d\n", (int)frame.motor_count);
+			g_rpmsgFrameLastDropLogTick = now;
+		}
 		return 0U;
 	}
 
@@ -104,6 +137,14 @@ static uint8_t DecodeRPMsgCommandFrame(RPMsgFrameInstance *instance,
 	crcCalc = RPMsgFrameCalcCrc16((const uint8_t *)&frame,
 								   (uint32_t)offsetof(FrameCommand_t, crc16));
 	if (crcCalc != crcExpect) {
+		now = HAL_GetTick();
+		if ((now - g_rpmsgFrameLastDropLogTick) >= 200U) {
+			HAL_DBG_ERR("RPMsg cmd crc mismatch, calc=0x%x rx=0x%x seq=%d\n",
+					(unsigned int)crcCalc,
+					(unsigned int)crcExpect,
+					(int)frame.seq);
+			g_rpmsgFrameLastDropLogTick = now;
+		}
 		return 0U;
 	}
 

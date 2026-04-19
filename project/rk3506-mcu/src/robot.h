@@ -6,28 +6,19 @@
 #ifndef __ROBOT_H
 #define __ROBOT_H
 
-#include "hal_base.h"
-
 /**
- * @brief Robot module feature switches.
- */
-typedef struct {
-    uint8_t enable_rpmsg_test;
-    uint8_t enable_can_test;
-} Robot_Feature_s;
-
-/**
- * @brief Initialize module-level robot business.
+ * @brief 机器人初始化统一入口。
  *
- * This function only initializes module/business objects and does not touch
- * board-level BSP bring-up.
+ * 该函数是业务侧唯一需要在启动阶段调用的入口。
  */
-uint8_t Robot_Init(const Robot_Feature_s *feature);
+void RobotInit(void);
 
 /**
- * @brief SysTick hook for module-level periodic work.
+ * @brief 机器人周期任务。
+ *
+ * 无RTOS场景下可在SysTick中调用；有RTOS场景下可由任务调度调用。
  */
-void Robot_SysTickHandler(void);
+void RobotTask(void);
 
 
 

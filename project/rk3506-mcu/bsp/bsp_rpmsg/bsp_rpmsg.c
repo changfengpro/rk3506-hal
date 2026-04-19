@@ -411,8 +411,14 @@ uint8_t RPMsg_Transmit(RPMsgInstance *instance, uint32_t timeout_ms)
 {
     int32_t ret;
     uint32_t remoteEpt;
+    static uint32_t s_lastErrTick;
+    uint32_t nowTick;
 
     if ((instance == NULL) || (instance->ept == NULL) || (s_rpmsgInstance == NULL)) {
+        return 0U;
+    }
+
+    if (rpmsg_lite_is_link_up(s_rpmsgInstance) != RL_TRUE) {
         return 0U;
     }
 
@@ -431,6 +437,13 @@ uint8_t RPMsg_Transmit(RPMsgInstance *instance, uint32_t timeout_ms)
         return 0U;
     }
 
+    if (remoteEpt == instance->local_ept) {
+        HAL_DBG_ERR("RPMsg remote ept invalid, local=0x%x remote=0x%x\n",
+                    (unsigned int)instance->local_ept,
+                    (unsigned int)remoteEpt);
+        return 0U;
+    }
+
     ret = rpmsg_lite_send(s_rpmsgInstance,
                           instance->ept,
                           remoteEpt,
@@ -438,10 +451,14 @@ uint8_t RPMsg_Transmit(RPMsgInstance *instance, uint32_t timeout_ms)
                           instance->tx_len,
                           timeout_ms);
     if (ret != RL_SUCCESS) {
-        HAL_DBG_ERR("RPMsg send failed, local=%u, remote=%u, ret=%d\n",
-                    (unsigned int)instance->local_ept,
-                    (unsigned int)remoteEpt,
-                    (int)ret);
+        nowTick = HAL_GetTick();
+        if ((nowTick - s_lastErrTick) >= 200U) {
+            HAL_DBG_ERR("RPMsg send failed, local=0x%x, remote=0x%x, ret=%d\n",
+                        (unsigned int)instance->local_ept,
+                        (unsigned int)remoteEpt,
+                        (int)ret);
+            s_lastErrTick = nowTick;
+        }
         return 0U;
     }
 
