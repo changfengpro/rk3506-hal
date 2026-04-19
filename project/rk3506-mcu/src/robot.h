@@ -29,9 +29,6 @@ uint8_t Robot_Init(const Robot_Feature_s *feature);
  */
 void Robot_SysTickHandler(void);
 
-/* Debug counters for CAN test path. */
-extern volatile uint32_t g_appCanTxCnt;
-extern volatile uint32_t g_appCanTxErrCnt;
-extern volatile uint32_t g_appCanRxCnt;
+
 
 #endif /* __ROBOT_H */

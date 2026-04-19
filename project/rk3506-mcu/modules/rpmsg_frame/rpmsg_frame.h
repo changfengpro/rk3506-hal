@@ -9,6 +9,7 @@
 #define __FRAME_RPMSG_H
 
 #include "bsp_rpmsg.h"
+#include "../motor/motor_def.h"
 
 /* 单帧里最多携带的电机对象数量，MCU/Linux 两侧必须保持一致。 */
 #define RPMSG_FRAME_MAX_MOTOR_CNT 20U
@@ -16,22 +17,6 @@
 #define RPMSG_FRAME_Q8_SCALE 256L
 /* Q16 定点缩放系数，真实值 = 原始值 / 65536。 */
 #define RPMSG_FRAME_Q16_SCALE 65536L
-
-/**
- * @brief 电机类型枚举。
- *
- * 注意：
- * - 枚举值仅作为协议语义定义
- * - 在线上传输时使用 uint8_t 保存，避免 MCU/Linux 两侧 enum 大小不一致
- */
-typedef enum {
-	MOTOR_TYPE_NONE = 0,
-	GM6020,
-	M3508,
-	M2006,
-	LK9025,
-	HT04,
-} Motor_Type_e;
 
 /**
  * @brief 电机控制模式枚举。

@@ -1,3 +1,12 @@
+/*
+ * @Description: 
+ * @Author: changfengpro
+ * @brief: 
+ * @version: 
+ * @Date: 2026-04-18 18:02:49
+ * @LastEditors:  
+ * @LastEditTime: 2026-04-19 11:33:40
+ */
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * Copyright (c) 2022 changfengpro
@@ -67,7 +76,7 @@ void CANSetDLC(CANInstance *instance, uint8_t length);
 /**
  * @brief 发送一帧标准 CAN 数据帧。
  * @param instance 已注册的 CAN 实例。
- * @param timeout_ms 发送邮箱等待超时时间，单位毫秒。
+ * @param timeout_ms 发送邮箱等待超时时间，单位毫秒；传 0 表示仅尝试一次立即返回。
  * @return 1 表示成功写入发送邮箱，0 表示邮箱超时不可用或参数非法。
  */
 uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);

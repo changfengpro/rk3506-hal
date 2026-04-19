@@ -20,13 +20,15 @@ LINKER_SCRIPT := gcc_bus_m0.ld
 INCLUDES += -I ../bsp/bsp_uart \
             -I ../bsp/bsp_can \
             -I ../bsp/bsp_rpmsg \
-            -I ../modules/rpmsg_frame
+            -I ../modules/rpmsg_frame \
+            -I ../modules/motor/DJImotor
 
 
 SRC_DIRS += ../bsp/bsp_uart \
             ../bsp/bsp_can \
             ../bsp/bsp_rpmsg \
-            ../modules/rpmsg_frame
+            ../modules/rpmsg_frame \
+            ../modules/motor/DJImotor
 
 DEPS += $(OBJS:.o=.d)
 -include $(DEPS)

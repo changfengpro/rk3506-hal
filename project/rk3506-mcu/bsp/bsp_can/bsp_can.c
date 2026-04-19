@@ -90,7 +90,8 @@ static uint8_t s_canServiceInitialized = 0U;
 static uint8_t s_intmuxOutConfigured[CAN_INTMUX_OUT_COUNT] = {
     0U,
 };
-static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_ALL;
+/* 中断掩码由 BSP 统一维护，默认开启 RX。 */
+static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_RX;
 volatile uint32_t g_canSclkHz[DEVICE_CAN_CNT] = {
     0U,
     0U,
@@ -625,7 +626,7 @@ void BSP_CAN_Init(void)
         HAL_INTMUX_EnableIRQ(s_canDevs[i]->irqNum);
         CANApplyInterruptMask(s_canDevs[i]);
     }
-
+    CANSetInterruptEnable(s_canInterruptEnableMask);
     s_canServiceInitialized = 1U;
 }
 
@@ -725,6 +726,10 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms)
     tx_msg.fdf = CANFD_FORMAT;
     tx_msg.dlc = instance->tx_len;
     CANSwapBytesPerWord(tx_msg.data, instance->tx_buff, instance->tx_len);
+
+    if (timeout_ms == 0U) {
+        return (HAL_CANFD_Transmit(instance->can_handle, &tx_msg) == HAL_OK) ? 1U : 0U;
+    }
 
     start = HAL_GetTick();
     while (HAL_CANFD_Transmit(instance->can_handle, &tx_msg) != HAL_OK) {
