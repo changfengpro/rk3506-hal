@@ -203,3 +203,48 @@
   - `CAN0->RXINT_CTRL = 0x00000001`
   - `CAN0->WAVE_FILTER_CFG = 0x00000000`
   - `CAN0->ATF_CTL = 0x00000001`
+
+
+## [2026-04-21] 重构rpmsg时无法打通端点
+
+### 原因
+
+- `rpmsg_frame_instance = rpmsg_lite_remote_init((void *)SHM_BASE_ADDR, RL_PLATFORM_HIGHEST_LINK_ID, RL_NO_FLAGS, &rpmsg_ctxt);`
+-  `RL_PLATFORM_HIGHEST_LINK_ID` 应该修改为`#define RPMSG_LINK_ID      RL_PLATFORM_SET_LINK_ID(RPMSG_MASTER_ID, RPMSG_REMOTE_ID)`
+
+- 修改前
+```c
+int main(void)
+{
+    uint8_t rpmsg_ready = 0U;
+
+    HAL_Init();
+    BSP_Init();
+    HAL_INTMUX_Init();
+    BSP_UART_Init();
+    RPMsg_Frame_Init(); 
+    
+    __enable_irq();
+
+}
+  ```
+
+修改后
+```c
+int main(void)
+{
+    uint8_t rpmsg_ready = 0U;
+
+    HAL_Init();
+    BSP_Init();
+    HAL_INTMUX_Init();
+    BSP_UART_Init();
+    
+    __enable_irq();
+
+    RPMsg_Frame_Init(); 
+}
+  ```
+
+  区别在于rpmsg的初始化要开启中断，否则mailbox的通知无法触发，导致link_state=0
+  

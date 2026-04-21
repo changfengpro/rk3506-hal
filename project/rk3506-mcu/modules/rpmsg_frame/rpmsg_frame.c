@@ -5,7 +5,7 @@
  * @version: 
  * @Date: 2026-04-20 12:25:49
  * @LastEditors:  
- * @LastEditTime: 2026-04-21 21:04:54
+ * @LastEditTime: 2026-04-21 22:48:41
  */
 
 #include <stdlib.h>
@@ -25,6 +25,12 @@ extern uint32_t __linux_share_rpmsg_end__[];
 /* A7 和 M0 约定好的固定的端点端口号 */
 #define M0_LOCAL_EPT_ADDR  (0x2023)
 #define LINUX_DST_EPT_ADDR (0x2027)
+#define RPMSG_MASTER_ID    (0U)
+#define RPMSG_REMOTE_ID    (3U)
+#define RPMSG_LINK_ID      RL_PLATFORM_SET_LINK_ID(RPMSG_MASTER_ID, RPMSG_REMOTE_ID)
+
+#define RPMSG_LINKUP_WAIT_STEP_MS (10U)
+#define RPMSG_LINKUP_TIMEOUT_MS   (3000U)
 
 /* 静态上下文实例 */
 static struct rpmsg_lite_instance rpmsg_ctxt;
@@ -33,6 +39,7 @@ static struct rpmsg_lite_ept_static_context rpmsg_ept_context;
 /* 实例指针与端点指针 */
 struct rpmsg_lite_instance *rpmsg_frame_instance = NULL;
 struct rpmsg_lite_endpoint *rpmsg_frame_ept = NULL;
+static uint8_t g_rpmsg_inited = 0U;
 
 /* 全局变量：存放从 Linux 接收到的最新控制指令，供 1ms PID 中断读取 */
 System_ControlCmd_s linux_control_cmd = {0};
@@ -58,7 +65,7 @@ static int32_t RPMsg_Frame_Recv_Callback(void *payload, uint32_t payload_len, ui
  * ========================================================== */
 void RPMsg_Frame_Init(void)
 {
-    rpmsg_frame_instance = rpmsg_lite_remote_init((void *)SHM_BASE_ADDR, RL_PLATFORM_HIGHEST_LINK_ID, RL_NO_FLAGS, &rpmsg_ctxt);
+    rpmsg_frame_instance = rpmsg_lite_remote_init((void *)SHM_BASE_ADDR, RPMSG_LINK_ID, RL_NO_FLAGS, &rpmsg_ctxt);
     if(rpmsg_frame_instance == NULL)
     {
         // 初始化失败，处理错误
@@ -83,36 +90,19 @@ void RPMsg_Frame_Init(void)
 
 void RPMsg_Frame_Send_Telemetry(System_Telemetry_s *telemetry_data)
 {
+    int32_t ret;
+
     if (rpmsg_frame_instance == NULL || rpmsg_frame_ept == NULL) {
         return; // 未初始化则直接返回
     }
 
-    uint32_t tx_size = 0;
-
-    // 1. 从共享内存池中直接申请一块发送 Buffer (Zero-Copy 机制)
-    // 使用 RL_DONT_BLOCK非阻塞方式申请，如果没有可用 Buffer 则直接返回错误
-    void *tx_buf = rpmsg_lite_alloc_tx_buffer(rpmsg_frame_instance, &tx_size, RL_DONT_BLOCK);
-
-    if(tx_buf != NULL)
-    {
-        if(tx_size >= sizeof(System_Telemetry_s))
-        {
-            memcpy(tx_buf, telemetry_data, sizeof(System_Telemetry_s)); // 将数据直接填充到申请的发送 Buffer 中
-
-            rpmsg_lite_send_nocopy(rpmsg_frame_instance, rpmsg_frame_ept, LINUX_DST_EPT_ADDR, tx_buf, sizeof(System_Telemetry_s));
-
-            
-        }
-        else
-        {
-            RL_ASSERT(0); // 申请到的 Buffer 太小，无法发送数据，触发断言
-        }
-    }
-
-    else
-    {
-        // 没有可用的发送 Buffer，可能是因为发送队列满了，可以选择丢弃这次数据或者记录日志
-        // 这里我们选择丢弃这次数据并返回
-        HAL_DBG("No available tx buffer, telemetry data dropped");
+    ret = rpmsg_lite_send(rpmsg_frame_instance,
+                          rpmsg_frame_ept,
+                          LINUX_DST_EPT_ADDR,
+                          (char *)telemetry_data,
+                          sizeof(System_Telemetry_s),
+                          RL_DONT_BLOCK);
+    if (ret != RL_SUCCESS) {
+        HAL_DBG("RPMsg send telemetry failed: %d\n", ret);
     }
 }
