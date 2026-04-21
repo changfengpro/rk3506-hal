@@ -8,7 +8,7 @@ INCLUDES += \
 -I"$(RPMSG_LITE_PATH)/include" \
 -I"$(RPMSG_LITE_PATH)/include/environment/bm" \
 -I"$(RPMSG_LITE_PATH)/include/platform/$(SOC)" \
--I"$(RPMSG_LITE_PATH)/test" \
+
 
 SRC_DIRS += \
     $(RPMSG_LITE_PATH)/common \
@@ -16,7 +16,7 @@ SRC_DIRS += \
     $(RPMSG_LITE_PATH)/rpmsg_lite/porting/platform/$(SOC) \
     $(RPMSG_LITE_PATH)/init/platform/$(SOC) \
     $(RPMSG_LITE_PATH)/virtio \
-    $(RPMSG_LITE_PATH)/test \
+
 
 SRCS += \
     $(RPMSG_LITE_PATH)/rpmsg_lite/porting/environment/rpmsg_env_bm.c \

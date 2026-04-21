@@ -91,7 +91,8 @@ $(ELF): $(OBJS) $(LINKER_SCRIPT)
 $(BIN): $(ELF)
 	$(Q) $(OBJCOPY) $(OCFLAGS) -O binary $< $@
 
-CLEAN_FILES += $(OBJS) TestDemo*
+CLEAN_FILES += $(OBJS) TestDemo* mcu*
+CLEAN_FILES += $(HAL_OBJS) $(MAP) $(DEPS)
 
 clean:
 	rm -f $(CLEAN_FILES)

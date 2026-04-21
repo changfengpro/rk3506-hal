@@ -7,7 +7,8 @@ SOC		:= RK3506
 CPU		:= -mcpu=cortex-m0
 
 # BUS M0
-CFLAGS := -O2
+CFLAGS := -O0
+CFLAGS += -MMD -MP
 LDFLAGS := --specs=nosys.specs
 LINKER_SCRIPT := gcc_bus_m0.ld
 
@@ -18,12 +19,18 @@ LINKER_SCRIPT := gcc_bus_m0.ld
 
 INCLUDES += -I ../bsp/bsp_uart \
             -I ../bsp/bsp_can \
-            -I ../bsp/bsp_rpmsg
+            -I ../modules/rpmsg_frame \
+            -I ../modules/protocol \
+
 
 
 SRC_DIRS += ../bsp/bsp_uart \
             ../bsp/bsp_can \
-            ../bsp/bsp_rpmsg
+            ../bsp/bsp_rpmsg \
+            ../modules/rpmsg_frame \
 
+
+DEPS += $(OBJS:.o=.d)
+-include $(DEPS)
 
 include ../../common/GCC/Cortex-M.mk

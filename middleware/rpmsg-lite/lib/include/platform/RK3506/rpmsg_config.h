@@ -1,3 +1,12 @@
+/*
+ * @Description: 
+ * @Author: changfengpro
+ * @brief: 
+ * @version: 
+ * @Date: 2026-03-25 12:45:37
+ * @LastEditors:  
+ * @LastEditTime: 2026-04-21 20:20:12
+ */
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
@@ -24,6 +33,7 @@
 #define RL_PLATFORM_M_IRQ(n)    MAILBOX_AP_##n##_IRQn
 #define RL_PLATFORM_R_IRQ(n)    MAILBOX_BB_##n##_IRQn
 #define RL_RPMSG_MAGIC          (0x524D5347U)
+#define RL_USE_STATIC_API (1)
 #endif
 
 /*
