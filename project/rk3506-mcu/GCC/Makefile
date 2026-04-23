@@ -19,8 +19,13 @@ LINKER_SCRIPT := gcc_bus_m0.ld
 
 INCLUDES += -I ../bsp/bsp_uart \
             -I ../bsp/bsp_can \
+            -I ../bsp/bsp_rpmsg \
+            -I ../modules \
             -I ../modules/rpmsg_frame \
             -I ../modules/protocol \
+            -I ../modules/algorithm \
+            -I ../modules/motor \
+            -I ../modules/motor/DJImotor
 
 
 
@@ -28,6 +33,8 @@ SRC_DIRS += ../bsp/bsp_uart \
             ../bsp/bsp_can \
             ../bsp/bsp_rpmsg \
             ../modules/rpmsg_frame \
+            ../modules/algorithm \
+            ../modules/motor/DJImotor \
 
 
 DEPS += $(OBJS:.o=.d)

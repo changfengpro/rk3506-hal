@@ -166,16 +166,16 @@ static IRQn_Type CANGetIntmuxOutIRQ(uint32_t irq)
 }
 
 /**
- * @brief 根据 CAN 寄存器基址查找控制器索引。
- * @param can_handle CAN 控制器基址。
+ * @brief 根据 CAN 设备句柄查找控制器索引。
+ * @param can_handle CAN 控制器设备句柄。
  * @return 找到时返回控制器索引，失败时返回 DEVICE_CAN_CNT。
  */
-static uint32_t CANGetDeviceIndex(struct CAN_REG *can_handle)
+static uint32_t CANGetDeviceIndex(const struct HAL_CANFD_DEV *can_handle)
 {
     uint32_t i;
 
     for (i = 0U; i < DEVICE_CAN_CNT; i++) {
-        if (s_canDevs[i]->pReg == can_handle) {
+        if (s_canDevs[i] == can_handle) {
             return i;
         }
     }
@@ -184,11 +184,11 @@ static uint32_t CANGetDeviceIndex(struct CAN_REG *can_handle)
 }
 
 /**
- * @brief 根据 CAN 寄存器基址获取设备描述。
- * @param can_handle CAN 控制器基址。
+ * @brief 根据 CAN 设备句柄获取设备描述。
+ * @param can_handle CAN 控制器设备句柄。
  * @return 设备描述指针。
  */
-static const struct HAL_CANFD_DEV *CANGetDevice(struct CAN_REG *can_handle)
+static const struct HAL_CANFD_DEV *CANGetDevice(const struct HAL_CANFD_DEV *can_handle)
 {
     uint32_t devIdx = CANGetDeviceIndex(can_handle);
 
@@ -274,7 +274,7 @@ static void CANApplyNominalTiming1M(struct CAN_REG *pReg, uint32_t sclkHz)
  */
 static void CANInitController(const struct HAL_CANFD_DEV *dev, struct CANFD_CONFIG *cfg)
 {
-    uint32_t devIdx = CANGetDeviceIndex(dev->pReg);
+    uint32_t devIdx = CANGetDeviceIndex(dev);
     uint32_t sclkHz = CAN_SCLK_FALLBACK_HZ;
 
     if (devIdx >= DEVICE_CAN_CNT) {
@@ -369,7 +369,8 @@ static void CANDispatchRxMessage(struct CAN_REG *pReg, const struct CANFD_MSG *r
         if (can_instance[i] == NULL) {
             continue;
         }
-        if (can_instance[i]->can_handle != pReg) {
+        if ((can_instance[i]->can_handle == NULL) ||
+            (can_instance[i]->can_handle->pReg != pReg)) {
             continue;
         }
         if ((can_instance[i]->rx_id != CAN_ID_ANY) &&
@@ -724,7 +725,7 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms)
     CANSwapBytesPerWord(tx_msg.data, instance->tx_buff, instance->tx_len);
 
     start = HAL_GetTick();
-    while (HAL_CANFD_Transmit(instance->can_handle, &tx_msg) != HAL_OK) {
+    while (HAL_CANFD_Transmit(instance->can_handle->pReg, &tx_msg) != HAL_OK) {
         if ((HAL_GetTick() - start) > timeout_ms) {
             return 0U;
         }

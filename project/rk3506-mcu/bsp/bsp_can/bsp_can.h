@@ -1,3 +1,12 @@
+/*
+ * @Description: 
+ * @Author: changfengpro
+ * @brief: 
+ * @version: 
+ * @Date: 2026-04-20 12:10:53
+ * @LastEditors:  
+ * @LastEditTime: 2026-04-23 23:24:45
+ */
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
@@ -21,7 +30,7 @@ typedef struct CANInstance CANInstance;
 typedef void (*CAN_Callback)(CANInstance *ins);
 
 struct CANInstance {
-    struct CAN_REG *can_handle;
+    const struct HAL_CANFD_DEV *can_handle;
     uint32_t tx_id;
     uint32_t rx_id;
     uint32_t rx_msg_id;
@@ -34,7 +43,7 @@ struct CANInstance {
 };
 
 typedef struct {
-    struct CAN_REG *can_handle;
+    const struct HAL_CANFD_DEV *can_handle;
     uint32_t tx_id;
     uint32_t rx_id;
     CAN_Callback can_module_callback;

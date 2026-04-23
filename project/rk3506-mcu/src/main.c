@@ -5,7 +5,7 @@
  * @version: 
  * @Date: 2026-04-20 12:10:53
  * @LastEditors:  
- * @LastEditTime: 2026-04-23 16:23:40
+ * @LastEditTime: 2026-04-23 23:13:49
  */
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
@@ -38,7 +38,7 @@ void Init_Dummy_Telemetry_Data(System_Telemetry_s *telemetry)
         if (i < 4) 
         {
             // 模拟 1~4 号：M3508 底盘电机 (高频运行态)
-            telemetry->motors[i].can_id       = 0x205;
+            telemetry->motors[i].motor_id       = 0x205;
             telemetry->motors[i].type         = M3508;
             telemetry->motors[i].control_mode = MOTOR_CONTROL_MODE_VELOCITY;
             telemetry->motors[i].total_round  = 1000 + i * 15;        // 已经转了 1000 多圈
@@ -50,7 +50,7 @@ void Init_Dummy_Telemetry_Data(System_Telemetry_s *telemetry)
         else if (i < 8) 
         {
             // 模拟 5~8 号：GM6020 云台/关节电机 (低速维稳态)
-            telemetry->motors[i].can_id       = 0x209;
+            telemetry->motors[i].motor_id       = 0x209;
             telemetry->motors[i].type         = GM6020;
             telemetry->motors[i].control_mode = MOTOR_CONTROL_MODE_POSITION;
             telemetry->motors[i].total_round  = 5 + i;                // 转的圈数很少
