@@ -36,6 +36,7 @@ typedef struct {
     int32_t  total_round;  // 4 bytes: 累计圈数
     
     // 2 字节变量
+    uint16_t motor_id;       // 2 bytes: 当前motor can id
     uint16_t ecd;          // 2 bytes: 当前编码器原始值
     int16_t  speed_raw;    // 2 bytes: 原始速度反馈
     int16_t  real_current; // 2 bytes: 实际电流
@@ -46,7 +47,7 @@ typedef struct {
     uint8_t  temperature;  // 1 byte:  温度
     
     // 手动填充 3 字节，确保整个结构体大小为 16 字节的整数倍
-    uint8_t  reserved[3];  // 3 bytes: 保留对齐
+    uint8_t  reserved;  // 1 bytes: 保留对齐
 } Motor_IPC_Payload_s;     // 总大小严格为 16 bytes
 
 typedef struct {
@@ -64,7 +65,7 @@ typedef struct {
     int32_t torque_q16;       // 4 bytes: 力矩目标 Q16 (修复：改为 int32_t)
     
     // 1 字节变量
-    uint8_t motor_id;         // 1 byte:  电机 ID 
+    uint8_t motor_id;         // 1 byte:  电机CAN ID 
     uint8_t motor_type;       // 1 byte:  电机类型
     uint8_t control_mode;     // 1 byte:  控制模式
     

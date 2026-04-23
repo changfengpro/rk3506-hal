@@ -5,7 +5,7 @@
  * @version: 
  * @Date: 2026-04-20 12:25:49
  * @LastEditors:  
- * @LastEditTime: 2026-04-21 22:48:41
+ * @LastEditTime: 2026-04-23 17:14:39
  */
 
 #include <stdlib.h>
@@ -69,6 +69,7 @@ void RPMsg_Frame_Init(void)
     if(rpmsg_frame_instance == NULL)
     {
         // 初始化失败，处理错误
+        HAL_DBG("rpmsg_lite_remote_init failed\n");
         while(1);
     }
 
@@ -77,12 +78,12 @@ void RPMsg_Frame_Init(void)
         platform_time_delay(10); // 等待链接建立
         // 等待链接建立
     }
-    HAL_DBG("link_up = 1");
+    HAL_DBG("link_up = 1\n");
     rpmsg_frame_ept = rpmsg_lite_create_ept(rpmsg_frame_instance, M0_LOCAL_EPT_ADDR, RPMsg_Frame_Recv_Callback, NULL, &rpmsg_ept_context);
     if(rpmsg_frame_ept == NULL)
     {
         // 创建端点失败，处理错误
-        HAL_DBG("rpmsg_lite_create_ept failed");
+        HAL_DBG("rpmsg_lite_create_ept failed\n");
         while(1);
     }
 
