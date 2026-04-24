@@ -5,7 +5,7 @@
  * @version: 
  * @Date: 2026-04-20 12:10:53
  * @LastEditors:  
- * @LastEditTime: 2026-04-23 23:13:49
+ * @LastEditTime: 2026-04-24 11:22:19
  */
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
@@ -14,6 +14,7 @@
 #include <string.h>
 #include "hal_bsp.h"
 #include "hal_base.h"
+#include "hal_debug.h"
 #include "bsp_uart.h"
 #include "bsp_can.h"
 #include "rpmsg_frame.h"
@@ -80,30 +81,31 @@ void Init_Dummy_Telemetry_Data(System_Telemetry_s *telemetry)
 #endif
 
 
+
 int main(void)
 {
-    uint8_t rpmsg_ready = 0U;
-
     HAL_Init();
     BSP_Init();
     HAL_INTMUX_Init();
     BSP_UART_Init();
+    BSP_CAN_Init();
 
-    
     __enable_irq();
 
-    RPMsg_Frame_Init(); 
+    RPMsg_Frame_Init(); //必须开启中断后再初始化RPMsg框架，因为框架内部会使用中断进行通信 
+
 
 #ifdef RPMSG_FRAME_TEST
     Init_Dummy_Telemetry_Data(&mcu_telemetry);
 #endif
 
+
     while (1) {
 
-        
+
 #ifdef RPMSG_FRAME_TEST
-            mcu_telemetry.timestamp += 20;
-            RPMsg_Frame_Send_Telemetry(&mcu_telemetry);
+        mcu_telemetry.timestamp += 20;
+        RPMsg_Frame_Send_Telemetry(&mcu_telemetry);
 #endif
         HAL_DelayMs(2);
 

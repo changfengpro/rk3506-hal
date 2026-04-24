@@ -56,10 +56,12 @@ typedef struct {
 void BSP_CAN_Init(void);
 
 /**
- * @brief 配置 CAN TX/RX 中断开关。
+ * @brief 配置指定 CAN 控制器的 TX/RX 中断开关。
+ * @param can_handle 目标 CAN 控制器句柄，如 &g_can0Dev / &g_can1Dev。
  * @param interrupt_mask 中断使能位组合，支持 CAN_INTERRUPT_RX/CAN_INTERRUPT_TX。
  */
-void CANSetInterruptEnable(uint32_t interrupt_mask);
+void CANSetInterruptEnable(const struct HAL_CANFD_DEV *can_handle,
+                           uint32_t interrupt_mask);
 
 /**
  * @brief 注册一个 CAN 业务实例。

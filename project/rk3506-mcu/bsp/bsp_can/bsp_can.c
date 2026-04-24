@@ -89,7 +89,10 @@ static uint8_t s_canServiceInitialized = 0U;
 static uint8_t s_intmuxOutConfigured[CAN_INTMUX_OUT_COUNT] = {
     0U,
 };
-static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_ALL;
+static uint32_t s_canInterruptEnableMasks[DEVICE_CAN_CNT] = {
+    CAN_INTERRUPT_RX,
+    CAN_INTERRUPT_RX,
+};
 volatile uint32_t g_canSclkHz[DEVICE_CAN_CNT] = {
     0U,
     0U,
@@ -200,17 +203,26 @@ static const struct HAL_CANFD_DEV *CANGetDevice(const struct HAL_CANFD_DEV *can_
 }
 
 /**
- * @brief 获取当前运行期需要放行的中断位。
+ * @brief 获取指定 CAN 控制器当前运行期需要放行的中断位。
+ * @param dev CAN 控制器设备描述。
  * @return INT_MASK 中需要解屏蔽的中断位组合。
  */
-static uint32_t CANGetRuntimeInterruptUnmaskBits(void)
+static uint32_t CANGetRuntimeInterruptUnmaskBits(const struct HAL_CANFD_DEV *dev)
 {
+    uint32_t devIdx = CANGetDeviceIndex(dev);
+    uint32_t interruptMask;
     uint32_t unmaskBits = 0U;
 
-    if ((s_canInterruptEnableMask & CAN_INTERRUPT_RX) != 0U) {
+    if (devIdx >= DEVICE_CAN_CNT) {
+        return 0U;
+    }
+
+    interruptMask = s_canInterruptEnableMasks[devIdx];
+
+    if ((interruptMask & CAN_INTERRUPT_RX) != 0U) {
         unmaskBits |= CAN_RX_IRQ_UNMASK_BITS;
     }
-    if ((s_canInterruptEnableMask & CAN_INTERRUPT_TX) != 0U) {
+    if ((interruptMask & CAN_INTERRUPT_TX) != 0U) {
         unmaskBits |= CAN_TX_IRQ_UNMASK_BITS;
     }
 
@@ -223,7 +235,7 @@ static uint32_t CANGetRuntimeInterruptUnmaskBits(void)
  */
 static void CANApplyInterruptMask(const struct HAL_CANFD_DEV *dev)
 {
-    uint32_t unmaskBits = CANGetRuntimeInterruptUnmaskBits();
+    uint32_t unmaskBits = CANGetRuntimeInterruptUnmaskBits(dev);
 
     WRITE_REG(dev->pReg->INT_MASK, CAN_INT_VALID_MASK & ~unmaskBits);
 }
@@ -455,20 +467,29 @@ __attribute__((noinline)) static void CANRxIRQHandler(struct CAN_REG *pReg, uint
 
 /**
  * @brief 处理单个 CAN 控制器的收发中断。
- * @param pReg CAN 控制器基址。
+ * @param dev CAN 控制器设备描述。
  */
-static void CANCommonIRQHandler(struct CAN_REG *pReg)
+static void CANCommonIRQHandler(const struct HAL_CANFD_DEV *dev)
 {
-    uint32_t isr = HAL_CANFD_GetInterrupt(pReg);
+    uint32_t devIdx = CANGetDeviceIndex(dev);
+    uint32_t interruptMask;
+    uint32_t isr;
 
-    if (((s_canInterruptEnableMask & CAN_INTERRUPT_TX) != 0U) &&
-        ((isr & CAN_TX_EVENT_MASK) != 0U)) {
-        CANTxIRQHandler(pReg, isr);
+    if (devIdx >= DEVICE_CAN_CNT) {
+        return;
     }
 
-    if (((s_canInterruptEnableMask & CAN_INTERRUPT_RX) != 0U) &&
+    interruptMask = s_canInterruptEnableMasks[devIdx];
+    isr = HAL_CANFD_GetInterrupt(dev->pReg);
+
+    if (((interruptMask & CAN_INTERRUPT_TX) != 0U) &&
+        ((isr & CAN_TX_EVENT_MASK) != 0U)) {
+        CANTxIRQHandler(dev->pReg, isr);
+    }
+
+    if (((interruptMask & CAN_INTERRUPT_RX) != 0U) &&
         ((isr & CAN_RX_EVENT_MASK) != 0U)) {
-        CANRxIRQHandler(pReg, isr);
+        CANRxIRQHandler(dev->pReg, isr);
     }
 }
 
@@ -583,7 +604,7 @@ static HAL_Status CANINTMUXAdapter(uint32_t irq, void *args)
 
         devSrc = CANGetIntmuxSource((uint32_t)s_canDevs[i]->irqNum);
         if (irqSrc == devSrc) {
-            CANCommonIRQHandler(s_canDevs[i]->pReg);
+            CANCommonIRQHandler(s_canDevs[i]);
             break;
         }
     }
@@ -626,22 +647,25 @@ void BSP_CAN_Init(void)
     s_canServiceInitialized = 1U;
 }
 
-void CANSetInterruptEnable(uint32_t interrupt_mask)
+void CANSetInterruptEnable(const struct HAL_CANFD_DEV *can_handle,
+                           uint32_t interrupt_mask)
 {
-    uint32_t i;
+    uint32_t devIdx = CANGetDeviceIndex(can_handle);
 
-    s_canInterruptEnableMask = interrupt_mask & CAN_INTERRUPT_ALL;
+    if (devIdx >= DEVICE_CAN_CNT) {
+        return;
+    }
+
+    s_canInterruptEnableMasks[devIdx] = interrupt_mask & CAN_INTERRUPT_ALL;
 
     if (s_canServiceInitialized == 0U) {
         return;
     }
-
-    for (i = 0U; i < DEVICE_CAN_CNT; i++) {
-        if (s_canControllerInitialized[i] == 0U) {
-            continue;
-        }
-        CANApplyInterruptMask(s_canDevs[i]);
+    if (s_canControllerInitialized[devIdx] == 0U) {
+        return;
     }
+
+    CANApplyInterruptMask(s_canDevs[devIdx]);
 }
 
 CANInstance *CANRegister(CAN_Init_Config_s *config)

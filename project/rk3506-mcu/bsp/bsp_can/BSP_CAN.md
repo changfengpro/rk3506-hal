@@ -69,19 +69,21 @@ typedef struct {
 
 ```c
 void BSP_CAN_Init(void);
-void CAN_SetInterruptEnable(uint32_t interrupt_mask);
+void CAN_SetInterruptEnable(const struct HAL_CANFD_DEV *can_handle,
+                            uint32_t interrupt_mask);
 CANInstance *CAN_Register(CAN_Init_Config_s *config);
 void CAN_SetDLC(CANInstance *instance, uint8_t length);
 uint8_t CAN_Transmit(CANInstance *instance, uint32_t timeout_ms);
 
-void CANSetInterruptEnable(uint32_t interrupt_mask);
+void CANSetInterruptEnable(const struct HAL_CANFD_DEV *can_handle,
+                           uint32_t interrupt_mask);
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 void CANSetDLC(CANInstance *instance, uint8_t length);
 uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 ```
 
 - `BSP_CAN_Init()` 用于显式初始化 CAN 服务，建议在 `main.c` 中调用并早于 `CAN_Register()`。
-- `CAN_SetInterruptEnable()` 用于配置 TX/RX 中断开关，支持按位组合 `CAN_INTERRUPT_RX` 和 `CAN_INTERRUPT_TX`。
+- `CAN_SetInterruptEnable()` 用于为指定 CAN 控制器配置 TX/RX 中断开关，支持按位组合 `CAN_INTERRUPT_RX` 和 `CAN_INTERRUPT_TX`。
 - `CAN_Register()` 用于注册一个 CAN 实例。推荐在 module 初始化函数中调用。
 - `CAN_SetDLC()` 用于设置发送帧长度，当前经典 CAN 模式下支持 `1~8`。
 - `CAN_Transmit()` 用于发送一帧数据。调用前需要先填好 `tx_buff` 和 `tx_len`。
@@ -95,10 +97,10 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 #define CAN_INTERRUPT_ALL   (CAN_INTERRUPT_RX | CAN_INTERRUPT_TX)
 ```
 
-- 默认配置是 `CAN_INTERRUPT_ALL`，也就是同时打开 TX 和 RX 中断。
-- `static uint32_t s_canInterruptEnableMask = CAN_INTERRUPT_ALL;`
-- 如果希望同时打开 TX 和 RX 中断，请传入 `CAN_INTERRUPT_ALL`。
-- 如果希望关闭 TX 中断但保留接收回调，传入 `CAN_INTERRUPT_RX` 即可。
+- 默认配置是 `can0/can1` 都只打开 `CAN_INTERRUPT_RX`。
+- 驱动内部按控制器分别保存中断使能掩码。
+- 如果希望某一路同时打开 TX 和 RX 中断，请对该路传入 `CAN_INTERRUPT_ALL`。
+- 如果希望该路关闭 TX 中断但保留接收回调，传入 `CAN_INTERRUPT_RX` 即可。
 - 如果希望关闭全部中断，可以传入 `0U`。此时发送接口仍会轮询 TX 状态，但接收回调不会再靠中断触发。
 
 推荐在 `BSP_CAN_Init()` 之前先设置中断策略；如果在初始化之后调用，驱动也会立即把新的屏蔽策略写回硬件。
@@ -106,23 +108,23 @@ uint8_t CANTransmit(CANInstance *instance, uint32_t timeout_ms);
 常见用法：
 
 ```c
-/* 如需只开 RX 中断 */
+/* 如需让 CAN1 只开 RX 中断 */
 
-CAN_SetInterruptEnable(CAN_INTERRUPT_RX);
+CAN_SetInterruptEnable(&g_can1Dev, CAN_INTERRUPT_RX);
 BSP_CAN_Init();
 ```
 
 ```c
-/* 需要发送完成/失败也走中断时 */
-CAN_SetInterruptEnable(CAN_INTERRUPT_ALL);
+/* 需要让 CAN0 的发送完成/失败也走中断时 */
+CAN_SetInterruptEnable(&g_can0Dev, CAN_INTERRUPT_ALL);
 BSP_CAN_Init();
 ```
 
 ```c
-/* 已经初始化完成后，也可以动态切换 */
-CAN_SetInterruptEnable(CAN_INTERRUPT_TX);
-CAN_SetInterruptEnable(0U);
-CAN_SetInterruptEnable(CAN_INTERRUPT_RX);
+/* 已经初始化完成后，也可以按控制器动态切换 */
+CAN_SetInterruptEnable(&g_can0Dev, CAN_INTERRUPT_TX);
+CAN_SetInterruptEnable(&g_can1Dev, 0U);
+CAN_SetInterruptEnable(&g_can1Dev, CAN_INTERRUPT_RX);
 ```
 
 推荐的注册方式：
@@ -184,7 +186,7 @@ static uint8_t idx = 0U;
 
 - 当前发送路径使用的是标准数据帧，推荐 `DLC <= 8`。
 - 当前实现要求先调用 `BSP_CAN_Init()`，再调用 `CAN_Register()`/`CANRegister()` 注册实例。
-- 默认同时打开 TX 和 RX 中断；如果应用层显式关闭 TX 中断，`CAN_Transmit()` 会改为轮询 TX 完成/失败状态。
+- 默认 `can0/can1` 只打开 RX 中断；如果应用层显式打开 TX 中断，`CAN_Transmit()` 的完成/失败事件也可以通过中断参与处理。
 - 如果总线上没有其它有效节点给 ACK，发送邮箱可能会被自动重发占住，最终导致发送超时。
 - 如果某个任务周期要求非常严格，`timeout_ms` 不应设置过大，否则等待邮箱/等待发送结果的过程可能影响该任务的时序精度。
 - 当前 `CAN_Register()` 会动态分配实例内存，如果后续实例数量固定且非常关注内存碎片，可以再改为静态实例池。

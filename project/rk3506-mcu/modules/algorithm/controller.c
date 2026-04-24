@@ -150,7 +150,10 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
     if (pid->Improve & PID_ErrorHandle)
         f_PID_ErrorHandle(pid);
 
-    pid->dt = HAL_getTick();
+    uint32_t now_cnt, last_cnt;
+    now_cnt = HAL_GetTick(); // 获取当前系统时间,单位ms
+
+    pid->dt = (now_cnt - last_cnt) / 1000.0f; // 获取两次pid计算的时间间隔,用于积分和微分
 
     // 保存上次的测量值和误差,计算当前error
     pid->Measure = measure;
@@ -203,6 +206,8 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
     pid->Last_Dout = pid->Dout;
     pid->Last_Err = pid->Err;
     pid->Last_ITerm = pid->ITerm;
+
+    last_cnt = now_cnt;
 
     return pid->Output;
 }
